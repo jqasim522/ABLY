@@ -53,6 +53,7 @@ class ConversationalTravelTerminal:
         self.ably = None
         self.channel = None
         self.user_id = str(uuid.uuid4())
+        
         self.response_event = asyncio.Event()
         self.last_response = None
         self.current_booking_info = {}

@@ -45,80 +45,6 @@ city_to_iata = {
     "nawabshah": "WNS"
 }
 
-# Airline name mappings (including common variations and misspellings)
-airline_mappings = {
-    # Pakistani Airlines
-    "airblue": ["airblue", "air blue", "air-blue", "airblue airlines"],
-    "serene_air": ["serene air", "serene-air", "sereneair", "serene air lines", "serene airlines"],
-    "pia": [
-        "pia", "pakistan international airlines", "pakistan international", 
-        "pakistan airlines", "pakistan air", "pakistani airlines"
-    ],
-    "shaheen_air": ["shaheen air", "shaheen-air", "shaheenair", "shaheen airlines"],
-    
-    # International Airlines (Major ones)
-    "emirates": ["emirates", "emirates airlines", "emirates airways", "ek"],
-    "qatar_airways": ["qatar airways", "qatar", "qatar airlines", "qr"],
-    "etihad": ["etihad", "etihad airways", "etihad airlines", "ey"],
-    "turkish_airlines": ["turkish airlines", "turkish", "turkish airways", "tk"],
-    "lufthansa": ["lufthansa", "lufthansa airlines", "lufthansa airways", "lh"],
-    "british_airways": ["british airways", "british", "ba", "british airlines"],
-    "air_arabia": ["air arabia", "air-arabia", "airarabia", "g9"],
-    "flydubai": ["flydubai", "fly dubai", "fly-dubai", "fz"],
-    "saudia": ["saudia", "saudi airlines", "saudi arabian airlines", "sv"],
-    "gulf_air": ["gulf air", "gulf-air", "gulfair", "gulf airlines", "gf"],
-    "oman_air": ["oman air", "oman-air", "omanair", "oman airlines", "wy"],
-    "kuwait_airways": ["kuwait airways", "kuwait", "kuwait airlines", "ku"],
-    "middle_east_airlines": ["middle east airlines", "mea", "middle eastern airlines"],
-    "royal_jordanian": ["royal jordanian", "royal-jordanian", "rj", "jordanian airlines"],
-    "egyptair": ["egyptair", "egypt air", "egypt-air", "egyptian airlines", "ms"],
-    
-    # Asian Airlines
-    "cathay_pacific": ["cathay pacific", "cathay-pacific", "cathay", "cx"],
-    "singapore_airlines": ["singapore airlines", "singapore", "sia", "sq"],
-    "malaysia_airlines": ["malaysia airlines", "malaysia", "malaysian airlines", "mh"],
-    "thai_airways": ["thai airways", "thai", "thai airlines", "tg"],
-    "air_india": ["air india", "air-india", "airindia", "indian airlines", "ai"],
-    "indigo": ["indigo", "indigo airlines", "6e"],
-    "spicejet": ["spicejet", "spice jet", "spice-jet", "sg"],
-    "china_southern": ["china southern", "china-southern", "cz"],
-    "china_eastern": ["china eastern", "china-eastern", "mu"],
-    
-    # European Airlines
-    "klm": ["klm", "klm airlines", "klm royal dutch airlines", "kl"],
-    "air_france": ["air france", "air-france", "airfrance", "af"],
-    "alitalia": ["alitalia", "alitalia airlines", "az"],
-    "swiss": ["swiss", "swiss airlines", "swiss international", "lx"],
-    "austrian_airlines": ["austrian airlines", "austrian", "os"],
-    "scandinavian_airlines": ["sas", "scandinavian airlines", "scandinavian", "sk"],
-    
-    # American Airlines
-    "american_airlines": ["american airlines", "american", "aa"],
-    "delta": ["delta", "delta airlines", "delta airways", "dl"],
-    "united": ["united", "united airlines", "ua"],
-    "southwest": ["southwest", "southwest airlines", "wn"],
-    "jetblue": ["jetblue", "jet blue", "jet-blue", "b6"],
-    
-    # Budget/Low-cost carriers
-    "ryanair": ["ryanair", "ryan air", "ryan-air", "fr"],
-    "easyjet": ["easyjet", "easy jet", "easy-jet", "u2"],
-    "wizz_air": ["wizz air", "wizz-air", "wizzair", "w6"],
-    "norwegian": ["norwegian", "norwegian airlines", "dy"],
-    "vueling": ["vueling", "vueling airlines", "vy"],
-    
-    # Other notable airlines
-    "aeroflot": ["aeroflot", "aeroflot airlines", "su"],
-    "korean_air": ["korean air", "korean-air", "koreanair", "ke"],
-    "asiana": ["asiana", "asiana airlines", "oz"],
-    "japan_airlines": ["jal", "japan airlines", "japanese airlines", "jl"],
-    "ana": ["ana", "all nippon airways", "all nippon", "nh"],
-    "etihad_regional": ["etihad regional", "darwin airline"],
-    "air_canada": ["air canada", "air-canada", "aircanada", "ac"],
-    "westjet": ["westjet", "west jet", "west-jet", "ws"]
-}
-
-# Create a flattened list of all airline keywords for fuzzy matching
-all_airline_keywords = [(variation.lower(), code) for code, variations in airline_mappings.items() for variation in variations]
 
 city_names = list(city_to_iata.keys())
 # Create reverse mapping for IATA codes
@@ -132,6 +58,20 @@ def extract_cities_multiword(text):
     text_lower = text.lower()
     found_cities = []
     
+    # Special handling for "Now" modification queries
+    is_modification_query = " now " in text_lower or text_lower.strip().startswith("now ")
+    
+    if is_modification_query:
+        # Focus only on the part after "now" for city extraction
+        if " now " in text_lower:
+            now_start = text_lower.find(" now ") + 5  # +5 to skip " now "
+        else:
+            now_start = 4  # Skip "now "
+            
+        relevant_text = text_lower[now_start:].strip()
+    else:
+        relevant_text = text_lower
+    
     # First, check for IATA codes (3-letter uppercase codes)
     iata_pattern = r'\b[A-Z]{3}\b'
     iata_matches = re.finditer(iata_pattern, text.upper())
@@ -140,39 +80,89 @@ def extract_cities_multiword(text):
         iata_code = match.group()
         if iata_code in iata_codes:
             start_pos = match.start()
-            words_before = len(text[:start_pos].split())
-            found_cities.append((iata_code, words_before, start_pos))
+            # For "Now" queries, only include IATA codes from the relevant part
+            if is_modification_query:
+                if " now " in text_lower:
+                    now_start = text_lower.find(" now ") + 5
+                else:
+                    now_start = 4
+                if start_pos >= now_start:
+                    words_before = len(text[:start_pos].split())
+                    found_cities.append((iata_code, words_before, start_pos))
+            else:
+                words_before = len(text[:start_pos].split())
+                found_cities.append((iata_code, words_before, start_pos))
     
     # Also check for city names (don't return early, combine with IATA codes)
     # Sort cities by length (longest first) to match multi-word cities first
     sorted_cities = sorted(city_names, key=len, reverse=True)
     
     for city in sorted_cities:
-        if city in text_lower:
-            # Find the position of the city in the text
-            start_pos = text_lower.find(city)
-            if start_pos != -1:
+        if city in relevant_text:
+            # Find the position of the city in the relevant text
+            start_pos_in_relevant = relevant_text.find(city)
+            if start_pos_in_relevant != -1:
                 # Check if it's a whole word match (not part of another word)
-                start_char = start_pos == 0 or not text_lower[start_pos - 1].isalnum()
-                end_char = (start_pos + len(city) == len(text_lower) or 
-                           not text_lower[start_pos + len(city)].isalnum())
+                start_char = start_pos_in_relevant == 0 or not relevant_text[start_pos_in_relevant - 1].isalnum()
+                end_char = (start_pos_in_relevant + len(city) == len(relevant_text) or 
+                           not relevant_text[start_pos_in_relevant + len(city)].isalnum())
                 
                 if start_char and end_char:
                     iata = city_to_iata[city]
+                    # Calculate position in original text
+                    if is_modification_query:
+                        # Adjust position to account for text before "now"
+                        if " now " in text_lower:
+                            actual_start_pos = text_lower.find(" now ") + 5 + start_pos_in_relevant
+                        else:
+                            actual_start_pos = 4 + start_pos_in_relevant  # Skip "now "
+                    else:
+                        actual_start_pos = start_pos_in_relevant
+                    
                     # Calculate approximate token position
-                    words_before = len(text_lower[:start_pos].split())
-                    found_cities.append((iata, words_before, start_pos))
-                    # Remove the matched city from text to avoid overlapping matches
-                    text_lower = text_lower.replace(city, " " * len(city), 1)
+                    words_before = len(text_lower[:actual_start_pos].split())
+                    found_cities.append((iata, words_before, actual_start_pos))
+                    # Remove the matched city from relevant text to avoid overlapping matches
+                    relevant_text = relevant_text.replace(city, " " * len(city), 1)
     
     return found_cities
 
 def extract_cities(query):
     query_lower = query.lower()
-    doc = nlp(query_lower)
     
-    # First try to extract multi-word cities
-    found_cities = extract_cities_multiword(query_lower)
+    # Special case: Handle modification queries containing "Now"
+    # This is for conversational modifications where the agent asks for changes
+    is_modification_query = " now " in query_lower or query_lower.strip().startswith("now ")
+    
+    if is_modification_query:
+        
+        # Find the "Now" part and extract cities from it
+        if " now " in query_lower:
+            now_start = query_lower.find(" now ") + 1  # +1 to include the space before "now"
+        else:
+            now_start = 0  # If it starts with "now"
+            
+        now_part = query_lower[now_start:].strip()
+        
+        now_cities = extract_cities_multiword(now_part)
+        
+        if now_cities:
+            # Process only the cities from the "Now" modification
+            found_cities = now_cities
+            # Use the "Now" part for directional analysis too
+            analysis_text = now_part
+            doc = nlp(now_part)
+        else:
+            # Fallback to full extraction if no cities found in "Now" part
+            found_cities = extract_cities_multiword(query_lower)
+            analysis_text = query_lower
+            doc = nlp(query_lower)
+    else:
+        # Normal extraction process
+        # First try to extract multi-word cities
+        found_cities = extract_cities_multiword(query_lower)
+        analysis_text = query_lower
+        doc = nlp(query_lower)
     
     # If no multi-word cities found, try entity recognition and fuzzy matching
     if not found_cities:
@@ -209,11 +199,11 @@ def extract_cities(query):
     # Use improved logic to identify source and destination
     source = destination = None
     
-    # Look for directional indicators
+    # Look for directional indicators in the analysis text (which is either full query or "Now" part)
     from_indicators = ["from", "leaving", "departing", "starting"]
     to_indicators = ["to", "towards", "going to", "arriving", "destination"]
     
-    # Check for explicit directional phrases
+    # Check for explicit directional phrases using the correct analysis text
     for token in doc:
         if token.text.lower() in from_indicators:
             # Look for cities after "from" indicators
@@ -237,8 +227,8 @@ def extract_cities(query):
     if not source and not destination and found_cities:
         if len(found_cities) == 1:
             # Single city - could be either source or destination
-            # Check context for clues
-            if any(word in query_lower for word in to_indicators + ["going", "want to go"]):
+            # Check context for clues in analysis text
+            if any(word in analysis_text for word in to_indicators + ["going", "want to go"]):
                 destination = found_cities[0][0]
             else:
                 source = found_cities[0][0]
@@ -822,218 +812,6 @@ def fallback_extraction(query: str) -> Dict[str, int]:
         'children': children,
         'infants': infants
     }
-
-
-# Alternative function using Groq's Mixtral model for complex cases
-def extract_passenger_count_mixtral(query: str) -> Dict[str, int]:
-    """
-    Use Mixtral model for more complex passenger extraction
-    """
-    try:
-        client = Groq(api_key="your_groq_api_key_here")
-        
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert at extracting passenger information from travel queries. Always return valid JSON with adults, children, and infants counts."
-                },
-                {
-                    "role": "user",
-                    "content": f"""
-Extract passenger counts from: "{query}"
-
-Rules:
-- Adults: 18+ years
-- Children: 2-17 years  
-- Infants: 0-2 years
-- Age numbers override categories
-- "fam of 2 10 yr olds" = 2 children, not adults
-- Include speaker in count when mentioned
-
-Return JSON: {{"adults": X, "children": Y, "infants": Z}}
-"""
-                }
-            ],
-            model="mixtral-8x7b-32768",  # More capable model
-            temperature=0,
-            max_tokens=100
-        )
-        
-        response_text = chat_completion.choices[0].message.content.strip()
-        passenger_data = extract_and_clean_json(response_text)
-        
-        adults = max(0, int(passenger_data.get('adults', 0)))
-        children = max(0, int(passenger_data.get('children', 0)))
-        infants = max(0, int(passenger_data.get('infants', 0)))
-        
-        adults, children, infants = validate_passenger_counts(adults, children, infants)
-        
-        return {
-            'adults': adults,
-            'children': children,
-            'infants': infants
-        }
-        
-    except Exception as e:
-        print(f"Mixtral extraction failed: {e}")
-        return fallback_extraction(query)
-
-
-def validate_passenger_counts(adults: int, children: int, infants: int) -> tuple:
-    """Apply business logic validation to passenger counts"""
-    
-    # Ensure at least 1 adult if children/infants present but no adults
-    if adults == 0 and (children > 0 or infants > 0):
-        adults = 1
-        print("⚠️  Added 1 adult to accompany children/infants")
-    
-    # Ensure at least 1 passenger total
-    if adults == 0 and children == 0 and infants == 0:
-        adults = 1
-        print("⚠️  Defaulted to 1 adult (no passengers specified)")
-    
-    return adults, children, infants
-
-
-def fallback_extraction(query: str) -> Dict[str, int]:
-    """
-    Enhanced fallback extraction using regex patterns
-    """
-    query_lower = query.lower()
-    adults = 0
-    children = 0
-    infants = 0
-    
-    print("🔄 Using fallback extraction...")
-    
-    # Enhanced regex patterns
-    patterns = {
-        'adults': [
-            r'(\d+)\s+adults?',
-            r'(\d+)\s+(?:people|persons?)',
-            r'with\s+(?:my\s+)?(?:wife|husband|partner)',  # +1 for speaker +1 for partner
-        ],
-        'children': [
-            r'(\d+)\s+(?:children?|kids?|child)',
-            r'(\d+)\s+(?:\d+\s*(?:yr|year|month)s?\s+old)',  # Age-based
-            r'(\d+)\s+(?:10|11|12|13|14|15|16|17)\s*(?:yr|year)',
-        ],
-        'infants': [
-            r'(\d+)\s+(?:infants?|babies|baby|newborns?)',
-            r'(\d+)\s+(?:\d+\s*months?\s+old)',
-            r'(\d+)\s+(?:0|1|2)\s*(?:yr|year)',
-        ]
-    }
-    
-    # Extract using patterns
-    for category, pattern_list in patterns.items():
-        for pattern in pattern_list:
-            matches = re.findall(pattern, query_lower)
-            if matches:
-                if category == 'adults':
-                    adults = max(adults, int(matches[0]))
-                elif category == 'children':
-                    children = max(children, int(matches[0]))
-                elif category == 'infants':
-                    infants = max(infants, int(matches[0]))
-    
-    # Handle special cases
-    if 'with wife' in query_lower or 'with husband' in query_lower:
-        adults = max(adults, 2)  # Speaker + spouse
-    
-    if 'family of' in query_lower:
-        family_match = re.search(r'family of (\d+)', query_lower)
-        if family_match:
-            total = int(family_match.group(1))
-            if adults == 0:  # If no adults specified yet
-                adults = min(2, total)  # Assume 2 adults max
-                children = max(0, total - adults)
-    
-    # Age-specific extraction for the problematic case
-    age_matches = re.findall(r'(\d+)\s+(\d+)\s*(?:yr|year)s?\s+old', query_lower)
-    for count, age in age_matches:
-        count = int(count)
-        age = int(age)
-        if 0 <= age <= 2:
-            infants += count
-        elif 3 <= age <= 17:
-            children += count
-        else:
-            adults += count
-    
-    # Month-based age for infants
-    month_matches = re.findall(r'(\d+)\s*months?\s+(?:old|baby)', query_lower)
-    for match in month_matches:
-        if 'one' in query_lower or '1' in match:
-            infants += 1
-    
-    # Apply validation
-    adults, children, infants = validate_passenger_counts(adults, children, infants)
-    
-    print(f"🔧 Fallback result: {adults} adults, {children} children, {infants} infants")
-    return {
-        'adults': adults,
-        'children': children,
-        'infants': infants
-    }
-
-
-# Alternative function using Groq's Mixtral model for complex cases
-def extract_passenger_count_mixtral(query: str) -> Dict[str, int]:
-    """
-    Use Mixtral model for more complex passenger extraction
-    """
-    try:
-        client = Groq(api_key="your_groq_api_key_here")
-        
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert at extracting passenger information from travel queries. Always return valid JSON with adults, children, and infants counts."
-                },
-                {
-                    "role": "user",
-                    "content": f"""
-Extract passenger counts from: "{query}"
-
-Rules:
-- Adults: 18+ years
-- Children: 2-17 years  
-- Infants: 0-2 years
-- Age numbers override categories
-- "fam of 2 10 yr olds" = 2 children, not adults
-- Include speaker in count when mentioned
-
-Return JSON: {{"adults": X, "children": Y, "infants": Z}}
-"""
-                }
-            ],
-            model="mixtral-8x7b-32768",  # More capable model
-            temperature=0,
-            max_tokens=100
-        )
-        
-        response_text = chat_completion.choices[0].message.content.strip()
-        passenger_data = extract_and_clean_json(response_text)
-        
-        adults = max(0, int(passenger_data.get('adults', 0)))
-        children = max(0, int(passenger_data.get('children', 0)))
-        infants = max(0, int(passenger_data.get('infants', 0)))
-        
-        adults, children, infants = validate_passenger_counts(adults, children, infants)
-        
-        return {
-            'adults': adults,
-            'children': children,
-            'infants': infants
-        }
-        
-    except Exception as e:
-        print(f"Mixtral extraction failed: {e}")
-        return fallback_extraction(query)
-
 
 def extract_dates(text, flight_type=None):
     """
