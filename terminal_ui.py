@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-Terminal-based Travel Flight Search Assistant
-A clean command-line interface for searching flights with conversational AI
+Conversational Travel Flight Search Assistant
+A natural, chat-based interface for searching flights with AI
 """
 
 import json
 import sys
 import os
-from datetime import datetime, date
-from typing import Dict, List, Optional, Any
-import re
 import asyncio
-from ably import AblyRealtime
+from datetime import datetime
+from typing import Dict, Optional, Any
 import uuid
-from ably_config import ABLY_API_KEY
-# Add the current directory to the path to import the travel agent
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from ably import AblyRealtime
+from ably_config import ABLY_API_KEY, CHANNEL_NAME, EVENTS
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -42,563 +39,450 @@ class Colors:
         cls.UNDERLINE = ''
         cls.END = ''
 
-class TravelTerminal:
-    """Terminal-based travel agent interface using Ably only"""
+class ConversationalTravelTerminal:
+    """Natural conversation-based travel agent interface"""
     
     def __init__(self):
-        self.conversation_state = 'initial'  # initial, missing_info, confirmation, complete
-        self.extracted_info = {}
-        self.missing_attributes = []
-        self.current_missing_index = 0
-        self.chat_history = []
-        self.final_results = None
-        self.prompts = []
+        self.conversation_active = True
+        self.awaiting_confirmation = False
+        self.awaiting_modification = False
+        self.search_completed = False
+        self.confirmation_shown = False  # Track if confirmation was already shown
+        
+        # Ably specific attributes
         self.ably = None
         self.channel = None
         self.user_id = str(uuid.uuid4())
         self.response_event = asyncio.Event()
-        self.last_result = None
-        self.turnaround_start_time = None
-        self.turnaround_end_time = None
+        self.last_response = None
+        self.current_booking_info = {}
         
         # Check if terminal supports colors
         if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
             Colors.disable()
-
+            
     async def setup_ably(self):
-        """Set up Ably Realtime instance and channel"""
-        self.ably = AblyRealtime(ABLY_API_KEY)
-        self.channel = self.ably.channels.get("travel-agent")
+        """Initialize Ably connection"""
+        try:
+            self.ably = AblyRealtime(ABLY_API_KEY)
+            self.channel = self.ably.channels.get(CHANNEL_NAME)
+            await self.subscribe_to_responses()
+            print(f"{Colors.GREEN}✓ Connected to travel agent service{Colors.END}\n")
+        except Exception as e:
+            print(f"{Colors.RED}Failed to connect to travel agent service: {str(e)}{Colors.END}")
+            raise
 
     async def subscribe_to_responses(self):
-        async def agent_response_handler(message):
+        """Subscribe to agent responses"""
+        async def response_handler(message):
             if message.data.get('user_id') == self.user_id:
-                result = message.data.get('result')
-                latency = message.data.get('latency') if result else None
-                self.last_result = result
+                self.last_response = message.data
+                if 'current_info' in message.data:
+                    self.current_booking_info = message.data['current_info']
                 self.response_event.set()
-                # Print response in chat format
-                print(f"\n{Colors.GREEN}Travel Agent Response:{Colors.END}")
-                print(result.get('llm_response') if result and 'llm_response' in result else result)
-                # print(f"{Colors.YELLOW}Response time: {latency if latency is not None else 'N/A'}s{Colors.END}")
-                # Show round-trip time for each response
-                if hasattr(self, 'query_sent_time') and self.query_sent_time:
-                    round_trip = (datetime.now() - self.query_sent_time).total_seconds()
-                    print(f"{Colors.YELLOW}Round-trip time: {round_trip:.2f} seconds{Colors.END}")
-                    self.query_sent_time = None
-        await self.channel.subscribe("agent-response", agent_response_handler)
 
-    async def send_query(self, query):
-        self.response_event.clear()
-        self.query_sent_time = datetime.now()
-        await self.channel.publish(
-            "user-query",
-            {
-                "user_id": self.user_id,
-                "query": query
+        await self.channel.subscribe(EVENTS['AGENT_RESPONSE'], response_handler)
+
+    async def send_to_agent(self, event_name: str, payload: dict) -> dict:
+        """Send message to agent via Ably and wait for response"""
+        try:
+            self.response_event.clear()
+            start_time = datetime.now()
+            payload['user_id'] = self.user_id
+            payload['query_time'] = start_time.isoformat()
+            
+            await self.channel.publish(event_name, payload)
+            await asyncio.wait_for(self.response_event.wait(), timeout=30)  # 30 second timeout
+            
+            end_time = datetime.now()
+            turnaround_time = (end_time - start_time).total_seconds()
+            
+            if isinstance(self.last_response, dict):
+                self.last_response['turnaround_time'] = turnaround_time
+            
+            return self.last_response
+        except asyncio.TimeoutError:
+            return {
+                "response": "I apologize, but I'm having trouble connecting to the travel agent service. Please try again.",
+                "type": "error",
+                "current_info": self.current_booking_info,
+                "turnaround_time": 30  # Timeout duration
             }
-        )
-
-    async def run(self):
-        self.print_header()
-        await self.setup_ably()
-        await self.subscribe_to_responses()
-        print("Travel Agent Chat started! Type 'exit' to quit.")
-        loop = asyncio.get_event_loop()
-        while True:
-            query = await loop.run_in_executor(None, input, f"{Colors.YELLOW}\nYou: {Colors.END}")
-            if query.lower() == 'exit':
-                break
-            await self.send_query(query)
-            await self.response_event.wait()
-        self.ably.close()
-        print(f"{Colors.CYAN}Goodbye! Safe travels! ✈️{Colors.END}")
     
     def print_header(self):
         """Print the application header"""
         print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
-        print(f"{Colors.BOLD}{Colors.BLUE}✈️  AI TRAVEL FLIGHT SEARCH ASSISTANT  ✈️{Colors.END}")
+        print(f"{Colors.BOLD}{Colors.BLUE}✈️  CONVERSATIONAL TRAVEL ASSISTANT  ✈️{Colors.END}")
         print(f"{Colors.CYAN}{'='*70}{Colors.END}")
-        print(f"{Colors.GREEN}Tell me about your travel plans and I'll help you find the best flights!{Colors.END}\n")
+        print(f"{Colors.GREEN}Hey there! I'm your personal travel assistant. Let's chat about your trip!{Colors.END}\n")
     
     def print_separator(self, char='-', length=50):
         """Print a separator line"""
         print(f"{Colors.CYAN}{char * length}{Colors.END}")
     
-    def print_success(self, message: str):
-        """Print success message"""
-        print(f"{Colors.GREEN}✅ {message}{Colors.END}")
-    
-    def print_error(self, message: str):
-        """Print error message"""
-        print(f"{Colors.RED}❌ {message}{Colors.END}")
-    
-    def print_warning(self, message: str):
-        """Print warning message"""
-        print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
-    
-    def print_info(self, message: str):
-        """Print info message"""
-        print(f"{Colors.BLUE}ℹ️  {message}{Colors.END}")
-    
-    def print_chat_message(self, message: str, sender: str = "assistant"):
+    def print_chat_message(self, message: str, sender: str = "assistant", turnaround_time: float = None):
         """Print a chat message with proper formatting"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now().strftime("%H:%M")
+        
         if sender == "user":
-            print(f"{Colors.CYAN}[{timestamp}] You:{Colors.END} {message}")
+            print(f"\n{Colors.CYAN}[{timestamp}] You:{Colors.END}")
+            # Format user message with indentation
+            for line in message.split('\n'):
+                print(f"  {line}")
         else:
-            print(f"{Colors.GREEN}[{timestamp}] Assistant:{Colors.END} {message}")
+            # Show response time for agent messages if available
+            time_info = ""
+            if turnaround_time is not None:
+                time_info = f" (response in {turnaround_time:.2f}s)"
+            print(f"\n{Colors.GREEN}[{timestamp}] Travel Assistant{time_info}:{Colors.END}")
+            
+            # Format assistant message with indentation and better spacing
+            for line in message.split('\n'):
+                if line.strip():
+                    print(f"  {line}")
+                else:
+                    print()  # Preserve empty lines for spacing
     
-    def add_to_chat(self, message: str, sender: str = "user"):
-        """Add message to chat history"""
-        self.chat_history.append({
-            "message": message,
-            "sender": sender,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
-        })
+    async def get_user_input(self, prompt: str = "") -> str:
+        """Get user input with proper formatting"""
+        if not prompt:
+            prompt = "You:"
+        
+        try:
+            print(f"\n{Colors.YELLOW}💬 {prompt}{Colors.END}")
+            user_input = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                lambda: input(f"{Colors.YELLOW}➤ {Colors.END}").strip()
+            )
+            return user_input
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}Chat paused. Type 'quit' to exit or continue chatting!{Colors.END}")
+            return ""
+        except EOFError:
+            return "quit"
     
-    async def get_user_input(self, prompt: str, allow_empty: bool = False) -> str:
-        """Get user input asynchronously with proper formatting"""
-        loop = asyncio.get_event_loop()
-        while True:
+    def handle_special_commands(self, user_input: str) -> bool:
+        """Handle special commands like help, quit, etc."""
+        command = user_input.lower().strip()
+        
+        if command in ['quit', 'exit', 'bye', 'goodbye']:
+            self.print_chat_message("It was great helping you with your travel plans! Have a wonderful trip and feel free to come back anytime you need flight assistance. Safe travels! ✈️", "assistant")
+            return False
+        
+        elif command in ['help', 'what can you do', 'how does this work']:
+            help_message = """I'm here to help you find and book flights in the most natural way possible! Here's how we can chat:
+
+🗣️ **Just talk to me naturally!** Tell me things like:
+   • "I need to fly from Lahore to Karachi next Friday"
+   • "Can you find me a business class ticket to Dubai for next week?"
+   • "I want to plan a family trip to Islamabad, we're 2 adults and 1 child"
+
+✈️ **I can help you with:**
+   • Finding flights across multiple airlines
+   • Comparing prices and schedules
+   • Booking different classes (economy, business, first)
+   • Planning round-trip or one-way journeys
+   • Managing group bookings
+
+🤖 **No forms to fill!** Just chat with me like you would with a travel agent friend. I'll ask for any details I need as we go along.
+
+💡 **Quick commands:**
+   • 'restart' - Start planning a new trip
+   • 'quit' - End our chat
+   • 'clear' - Clear our conversation history
+
+Ready to plan your next adventure? Just tell me where you'd like to go! 🌍"""
+            
+            self.print_chat_message(help_message, "assistant")
+            return True
+        
+        elif command in ['restart', 'new trip', 'start over', 'reset']:
+            self.awaiting_confirmation = False
+            self.awaiting_modification = False
+            self.search_completed = False
+            self.confirmation_shown = False
+            self.current_booking_info = {}
+            
+            # Will get welcome message in run_conversation_loop after reset
+            return True
+        
+        elif command in ['clear', 'clear history']:
+            self.awaiting_confirmation = False
+            self.awaiting_modification = False
+            self.confirmation_shown = False
+            self.current_booking_info = {}
+            self.print_chat_message("I've cleared our conversation history! Let's start fresh. What's your travel plan?", "assistant")
+            return True
+        
+        return True  # Continue conversation
+    
+    def detect_user_intent(self, user_input: str, current_context: Dict) -> str:
+        """Detect what the user intends to do based on their input and context"""
+        input_lower = user_input.lower()
+        
+        # Confirmation-related responses
+        confirmation_yes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'correct', 'right', 'perfect', 'good', 
+                           'looks good', 'that\'s right', 'proceed', 'go ahead', 'search', 'find flights',
+                           'everything is great', 'everything looks good', 'that\'s perfect', 'you can search']
+        confirmation_no = ['no', 'nope', 'not quite', 'incorrect', 'wrong', 'change', 'modify', 'edit', 'update']
+        
+        # Modification-related phrases
+        modification_phrases = ['change', 'modify', 'edit', 'update', 'different', 'instead', 'actually', 'correction']
+        
+        # Search-related phrases
+        search_phrases = ['search', 'find', 'look for', 'show me', 'get flights', 'book']
+        
+        if self.awaiting_confirmation:
+            if any(phrase in input_lower for phrase in confirmation_yes):
+                return "confirm_and_search"
+            elif any(phrase in input_lower for phrase in confirmation_no):
+                return "request_modification"
+            elif any(phrase in input_lower for phrase in modification_phrases):
+                return "request_modification"
+        
+        if self.awaiting_modification or any(phrase in input_lower for phrase in modification_phrases):
+            return "modify_details"
+        
+        if any(phrase in input_lower for phrase in search_phrases):
+            return "search_request"
+        
+        return "general_chat"
+    
+    def show_booking_summary_naturally(self, booking_info: Dict) -> str:
+        """Show booking information in a natural, conversational way"""
+        if not booking_info:
+            return ""
+        
+        # Only show summary if we have substantial information
+        has_route = booking_info.get('source') and booking_info.get('destination')
+        has_date = booking_info.get('departure_date')
+        
+        if not (has_route and has_date):
+            return ""
+        
+        summary_parts = []
+        
+        # Route information
+        route = f"✈️ {booking_info['source']} → {booking_info['destination']}"
+        summary_parts.append(route)
+        
+        # Trip type and dates
+        trip_info = []
+        if booking_info.get('flight_type'):
+            trip_type = "Round-trip" if booking_info['flight_type'] == 'return' else "One-way"
+            trip_info.append(trip_type)
+        
+        if booking_info.get('departure_date'):
+            trip_info.append(f"departing {booking_info['departure_date']}")
+        
+        if booking_info.get('return_date'):
+            trip_info.append(f"returning {booking_info['return_date']}")
+        
+        if trip_info:
+            summary_parts.append(f"📅 {' • '.join(trip_info)}")
+        
+        # Class and passengers
+        passengers = booking_info.get('passengers', {'adults': 1, 'children': 0, 'infants': 0})
+        class_text = booking_info.get('flight_class', 'economy').replace('_', ' ').title()
+        
+        passenger_count = passengers['adults']
+        if passengers['children'] > 0 or passengers['infants'] > 0:
+            passenger_count += passengers['children'] + passengers['infants']
+            passenger_text = f"{passenger_count} passengers"
+        else:
+            passenger_text = f"{passenger_count} adult(s)"
+        
+        summary_parts.append(f"👥 {passenger_text} • {class_text}")
+        
+        # Optional airline
+        if booking_info.get('content_provider'):
+            airline_name = booking_info['content_provider'].replace('_', ' ').title()
+            summary_parts.append(f"🏢 {airline_name}")
+        
+        return "\n".join(summary_parts)
+    
+    def should_show_summary(self, booking_info: Dict) -> bool:
+        """Determine if we should show the booking summary"""
+        # Only show summary when we have complete information for confirmation AND haven't shown it yet
+        required_fields = ['source', 'destination', 'departure_date', 'flight_class', 'flight_type']
+        has_complete_info = all(booking_info.get(field) for field in required_fields)
+        return has_complete_info and not self.confirmation_shown
+    
+    async def process_conversation_turn(self, user_input: str):
+        """Process a single turn in the conversation"""
+        # Detect user intent
+        current_context = {
+            "awaiting_confirmation": self.awaiting_confirmation,
+            "awaiting_modification": self.awaiting_modification,
+            "search_completed": self.search_completed,
+            "current_info": self.current_booking_info
+        }
+        
+        intent = self.detect_user_intent(user_input, current_context)
+        
+        if intent == "confirm_and_search":
+            # User confirmed, proceed with search
+            self.awaiting_confirmation = False
+            self.confirmation_shown = False
+            result = await self.send_to_agent(EVENTS['EXECUTE_SEARCH'], {
+                "current_info": self.current_booking_info
+            })
+            
+            if result.get("status") == "complete":
+                self.search_completed = True
+            self.print_chat_message(
+                result["response"], 
+                "assistant",
+                result.get("turnaround_time")
+            )
+        
+        elif intent in ["request_modification", "modify_details"]:
+            # User wants to modify something
+            self.awaiting_confirmation = False
+            self.awaiting_modification = True
+            self.confirmation_shown = False
+            
+            result = await self.send_to_agent(EVENTS['MODIFY_REQUEST'], {
+                "input": user_input,
+                "current_info": self.current_booking_info
+            })
+            self.print_chat_message(
+                result["response"], 
+                "assistant",
+                result.get("turnaround_time")
+            )
+            
+            # Check if we have all info after modification
+            missing_info = result.get("missing_info", [])
+            if not missing_info:
+                # Move to confirmation state
+                self.awaiting_confirmation = True
+                self.awaiting_modification = False
+        
+        else:
+            # General conversation - process normally
+            result = await self.send_to_agent(EVENTS['USER_QUERY'], {
+                "input": user_input,
+                "current_info": self.current_booking_info
+            })
+            self.print_chat_message(
+                result["response"], 
+                "assistant",
+                result.get("turnaround_time")
+            )
+            
+            # Update conversation state based on result
+            if result.get("type") == "confirmation":
+                self.awaiting_confirmation = True
+                self.awaiting_modification = False
+                
+                # Only show summary if it adds value and hasn't been shown
+                if not self.confirmation_shown and self.current_booking_info:
+                    summary = self.show_booking_summary_naturally(self.current_booking_info)
+                    if summary:
+                        self.print_chat_message(f"📋 **Quick Summary:**\n{summary}", "assistant")
+                        self.confirmation_shown = True
+                        
+            elif result.get("type") == "gathering_info":
+                self.awaiting_confirmation = False
+                self.awaiting_modification = False
+                self.confirmation_shown = False
+            elif result.get("type") == "modification":
+                self.awaiting_modification = True
+                self.awaiting_confirmation = False
+                self.confirmation_shown = False
+    
+    async def run_conversation_loop(self):
+        """Main async conversation loop"""
+        # Initialize Ably
+        await self.setup_ably()
+        
+        # Get welcome message from agent
+        result = await self.send_to_agent(EVENTS['RESET_CONVERSATION'], {})
+        self.print_chat_message(result["response"], "assistant")
+        
+        while self.conversation_active:
             try:
-                user_input = await loop.run_in_executor(None, input, f"{Colors.YELLOW}➤ {prompt}{Colors.END} ")
-                user_input = user_input.strip()
-                if user_input or allow_empty:
-                    return user_input
-                print(f"{Colors.RED}Please enter a valid response.{Colors.END}")
+                # Get user input
+                user_input = await self.get_user_input()
+                
+                if not user_input:
+                    continue
+                
+                # Handle special commands
+                should_continue = self.handle_special_commands(user_input)
+                if not should_continue:
+                    break
+                
+                # Skip if it was a special command
+                command = user_input.lower().strip()
+                if command in ['help', 'what can you do', 'how does this work', 'restart', 'new trip', 
+                              'start over', 'reset', 'clear', 'clear history']:
+                    continue
+                
+                # Show user input in chat format
+                self.print_chat_message(user_input, "user")
+                
+                # Process the conversation turn
+                await self.process_conversation_turn(user_input)
+                
+                # Add some spacing for readability
+                print()
+                
             except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}Operation cancelled.{Colors.END}")
-                return ""
-            except EOFError:
-                print(f"\n{Colors.RED}Input error.{Colors.END}")
-                return ""
+                print(f"\n{Colors.YELLOW}Chat paused. Type 'quit' to exit or keep chatting!{Colors.END}")
+                continue
+            except Exception as e:
+                error_msg = f"I apologize, but I encountered an issue: {str(e)}. Let's continue!"
+                self.print_chat_message(error_msg, "assistant")
+                continue
     
-    async def display_travel_info(self, info: Dict[str, Any], editable: bool = False) -> Optional[Dict[str, Any]]:
-        """Display travel information asynchronously"""
-        print(f"\n{Colors.BOLD}{Colors.BLUE}📝 Your Travel Details{Colors.END}")
-        self.print_separator()
-        
-        # Flight Details
-        print(f"{Colors.BOLD}🛫 Flight Details:{Colors.END}")
-        print(f"   From (IATA Code): {Colors.CYAN}{info.get('source', '-')}{Colors.END}")
-        print(f"   To (IATA Code): {Colors.CYAN}{info.get('destination', '-')}{Colors.END}")
-        print(f"   Trip Type: {Colors.CYAN}{info.get('flight_type', '-')}{Colors.END}")
-        print(f"   Travel Class: {Colors.CYAN}{info.get('flight_class', '-')}{Colors.END}")
-        print(f"   Preferred Airline: {Colors.CYAN}{info.get('content_provider', 'Not selected')}{Colors.END}")
-        if not info.get('content_provider'):
-            print(f"   {Colors.RED}⚠️ Airline selection required{Colors.END}")
-        
-        # Travel Dates
-        print(f"\n{Colors.BOLD}📅 Travel Dates:{Colors.END}")
-        print(f"   Departure Date: {Colors.CYAN}{info.get('departure_date', '-')}{Colors.END}")
-        if info.get('flight_type') == "return":
-            print(f"   Return Date: {Colors.CYAN}{info.get('return_date', '-')}{Colors.END}")
-        
-        # Passengers
-        print(f"\n{Colors.BOLD}👥 Passengers:{Colors.END}")
-        passengers = info.get('passengers', {})
-        print(f"   Adults: {Colors.CYAN}{passengers.get('adults', '-')}{Colors.END}")
-        print(f"   Children (2-11 years): {Colors.CYAN}{passengers.get('children', '-')}{Colors.END}")
-        print(f"   Infants (under 2 years): {Colors.CYAN}{passengers.get('infants', '-')}{Colors.END}")
-        
-        if not editable:
-            return None
-        
-        # Check if content_provider is missing and make it compulsory
-        if not info.get('content_provider'):
-            self.print_warning("Airline selection is required before proceeding.")
-            airline_options = ["airblue", "serene_air", "pia", "emirates", "qatar_airways", "etihad", "turkish_airlines"]
-            print(f"Available airlines: {', '.join(airline_options)}")
-            while True:
-                airline_choice = await self.get_user_input("Please select an airline: ")
-                if airline_choice in airline_options:
-                    info['content_provider'] = airline_choice
-                    break
-                else:
-                    self.print_error(f"Invalid airline: {airline_choice}. Please choose from: {', '.join(airline_options)}")
-        print(f"\n{Colors.YELLOW}Would you like to modify any details? (y/n){Colors.END}")
-        modify = (await self.get_user_input("")).lower()
-        if modify not in ['y', 'yes']:
-            return info
-        return await self.edit_travel_info(info)
-    
-    async def edit_travel_info(self, info: Dict[str, Any]) -> Dict[str, Any]:
-        """Allow user to edit travel information"""
-        print(f"\n{Colors.BOLD}{Colors.BLUE}✏️ Edit Your Travel Details{Colors.END}")
-        self.print_separator()
-        
-        # Available options
-        source_options = ["LHE", "KHI", "ISB", "MUX", "PEW", "UET", "LYP", "SKT", "KDU", "GIL", "SKZ", "GWD", "TUK", "BHV", "DEA", "CJL", "PJG", "MJD", "PAJ", "PZH", "DBA", "MFG", "RYK", "WNS"]
-        flight_types = ["one_way", "return"]
-        flight_classes = ["economy", "business", "first", "premium_economy"]
-        airline_options = ["", "airblue", "serene_air", "pia", "emirates", "qatar_airways", "etihad", "turkish_airlines"]
-        
-        updated_info = info.copy()
-        
-        # Edit source
-        print(f"\nCurrent source: {Colors.CYAN}{info.get('source', 'Not set')}{Colors.END}")
-        print(f"Available cities: {', '.join(source_options[:10])}...")
-        new_source = await self.get_user_input(f"New source (press Enter to keep current): ", allow_empty=True)
-        if new_source and new_source.upper() in source_options:
-            updated_info['source'] = new_source.upper()
-        elif new_source:
-            self.print_error(f"Invalid city code: {new_source}")
-        
-        # Edit destination
-        print(f"\nCurrent destination: {Colors.CYAN}{info.get('destination', 'Not set')}{Colors.END}")
-        new_dest = await self.get_user_input(f"New destination (press Enter to keep current): ", allow_empty=True)
-        if new_dest and new_dest.upper() in source_options:
-            updated_info['destination'] = new_dest.upper()
-        elif new_dest:
-            self.print_error(f"Invalid city code: {new_dest}")
-        
-        # Edit flight type
-        print(f"\nCurrent trip type: {Colors.CYAN}{info.get('flight_type', 'Not set')}{Colors.END}")
-        print(f"Options: {', '.join(flight_types)}")
-        new_type = await self.get_user_input(f"New trip type (press Enter to keep current): ", allow_empty=True)
-        if new_type and new_type in flight_types:
-            updated_info['flight_type'] = new_type
-        elif new_type:
-            self.print_error(f"Invalid flight type: {new_type}")
-        
-        # Edit flight class
-        print(f"\nCurrent travel class: {Colors.CYAN}{info.get('flight_class', 'Not set')}{Colors.END}")
-        print(f"Options: {', '.join(flight_classes)}")
-        new_class = await self.get_user_input(f"New travel class (press Enter to keep current): ", allow_empty=True)
-        if new_class and new_class in flight_classes:
-            updated_info['flight_class'] = new_class
-        elif new_class:
-            self.print_error(f"Invalid flight class: {new_class}")
-        
-        # Edit airline (now compulsory)
-        print(f"\nCurrent airline: {Colors.CYAN}{info.get('content_provider', 'Not set')}{Colors.END}")
-        print(f"Available airlines: {', '.join([a for a in airline_options if a])}")
-        while True:
-            new_airline = await self.get_user_input(f"Select airline (required): ", allow_empty=True)
-            if new_airline and new_airline in airline_options:
-                updated_info['content_provider'] = new_airline
-                break
-            elif new_airline == "" and info.get('content_provider'):
-                # Keep current if already set
-                break
-            elif new_airline:
-                self.print_error(f"Invalid airline: {new_airline}. Please choose from: {', '.join([a for a in airline_options if a])}")
-            else:
-                self.print_error("Airline selection is required. Please choose from the available options.")
-        
-        # Edit departure date
-        print(f"\nCurrent departure date: {Colors.CYAN}{info.get('departure_date', 'Not set')}{Colors.END}")
-        new_dep_date = await self.get_user_input(f"New departure date (YYYY-MM-DD, press Enter to keep current): ", allow_empty=True)
-        if new_dep_date:
-            try:
-                datetime.strptime(new_dep_date, "%Y-%m-%d")
-                updated_info['departure_date'] = new_dep_date
-            except ValueError:
-                self.print_error("Invalid date format. Use YYYY-MM-DD")
-        
-        # Edit return date if return flight
-        if updated_info.get('flight_type') == 'return':
-            print(f"\nCurrent return date: {Colors.CYAN}{info.get('return_date', 'Not set')}{Colors.END}")
-            new_ret_date = await self.get_user_input(f"New return date (YYYY-MM-DD, press Enter to keep current): ", allow_empty=True)
-            if new_ret_date:
-                try:
-                    datetime.strptime(new_ret_date, "%Y-%m-%d")
-                    updated_info['return_date'] = new_ret_date
-                except ValueError:
-                    self.print_error("Invalid date format. Use YYYY-MM-DD")
-        
-        # Edit passengers
-        passengers = info.get('passengers', {"adults": 1, "children": 0, "infants": 0})
-        print(f"\nCurrent passengers - Adults: {passengers.get('adults', 1)}, Children: {passengers.get('children', 0)}, Infants: {passengers.get('infants', 0)}")
-        
-        new_adults = await self.get_user_input(f"Number of adults (press Enter to keep current): ", allow_empty=True)
-        if new_adults and new_adults.isdigit():
-            passengers['adults'] = int(new_adults)
-        
-        new_children = await self.get_user_input(f"Number of children (press Enter to keep current): ", allow_empty=True)
-        if new_children and new_children.isdigit():
-            passengers['children'] = int(new_children)
-        
-        new_infants = await self.get_user_input(f"Number of infants (press Enter to keep current): ", allow_empty=True)
-        if new_infants and new_infants.isdigit():
-            passengers['infants'] = int(new_infants)
-        
-        updated_info['passengers'] = passengers
-        
-        # Validate
-        if updated_info.get('source') == updated_info.get('destination'):
-            self.print_error("Source and destination cannot be the same!")
-            return info
-        
-        # Ensure content_provider is set
-        if not updated_info.get('content_provider'):
-            self.print_error("Airline selection is required!")
-            print(f"Available airlines: {', '.join([a for a in airline_options if a])}")
-            while True:
-                airline_choice = await self.get_user_input("Please select an airline: ")
-                if airline_choice in [a for a in airline_options if a]:
-                    updated_info['content_provider'] = airline_choice
-                    break
-                else:
-                    self.print_error(f"Invalid airline: {airline_choice}. Please choose from the available options.")
-        
-        return updated_info
-    
-    def show_help(self):
-        """Show help information"""
-        print(f"\n{Colors.BOLD}{Colors.BLUE}🛟 Help & Tips{Colors.END}")
-        self.print_separator()
-        print(f"{Colors.GREEN}How to use:{Colors.END}")
-        print("1. Describe your travel plans naturally")
-        print("2. Answer any follow-up questions")
-        print("3. Confirm your details")
-        print("4. Get flight results!")
-        
-        print(f"\n{Colors.GREEN}Example queries:{Colors.END}")
-        print('• "I want to fly from Lahore to Karachi tomorrow"')
-        print('• "Business class flight to Dubai next week for 2 people"')
-        print('• "Return ticket ISB to LHE on 15th December"')
-        
-        print(f"\n{Colors.GREEN}Supported airlines:{Colors.END}")
-        print("PIA, Emirates, Qatar Airways, Etihad, Turkish Airlines, Airblue, Serene Air")
-        
-        print(f"\n{Colors.GREEN}Commands:{Colors.END}")
-        print("• 'help' - Show this help")
-        print("• 'quit' or 'exit' - Exit the application")
-        print("• 'restart' - Start a new search")
-        print("• 'clear' - Clear chat history")
-    
-    async def handle_initial_state(self):
-        """Handle initial state - get user query"""
-        print(f"{Colors.BOLD}🗣️ Describe your travel plans:{Colors.END}")
-        print(f"{Colors.CYAN}(Type 'help' for assistance or 'quit' to exit){Colors.END}")
-        
-        user_query = await self.get_user_input("")
-        
-        if user_query.lower() in ['quit', 'exit']:
-            return False
-        elif user_query.lower() == 'help':
-            self.show_help()
-            return True
-        elif user_query.lower() == 'clear':
-            self.chat_history = []
-            print(f"{Colors.GREEN}Chat history cleared.{Colors.END}")
-            return True
-        elif user_query.lower() == 'restart':
-            self.restart()
-            return True
-        elif not user_query:
-            return True
-        
-        self.add_to_chat(user_query, "user")
-        
-        print(f"{Colors.YELLOW}🔄 Processing your request...{Colors.END}")
-        # Start turnaround timer
-        self.turnaround_start_time = datetime.now()
-        # Send query to backend via Ably
-        await self.send_query(user_query)
-        await self.response_event.wait()
-        result = self.last_result
-        if not result:
-            self.print_error("No response from backend.")
-            return True
-        
-        if result["status"] == "missing_info":
-            self.conversation_state = 'missing_info'
-            self.extracted_info = result["extracted_info"]
-            self.missing_attributes = result["missing_attributes"]
-            self.prompts = result["prompts"]
-            self.current_missing_index = 0
-            
-            self.add_to_chat("I need some additional information to search for flights. Let me ask you a few questions.", "assistant")
-            self.print_chat_message("I need some additional information to search for flights. Let me ask you a few questions.", "assistant")
-        
-        elif result["status"] == "ready_for_confirmation":
-            self.conversation_state = 'confirmation'
-            self.extracted_info = result["extracted_info"]
-            self.add_to_chat("Great! I've gathered all the information. Please review and confirm your travel details.", "assistant")
-            self.print_chat_message("Great! I've gathered all the information. Please review and confirm your travel details.", "assistant")
-        
-        elif result["status"] == "error":
-            error_msg = f"❌ Error: {result['message']}"
-            self.add_to_chat(error_msg, "assistant")
-            self.print_chat_message(error_msg, "assistant")
-        
-        return True
+    def show_conversation_tips(self):
+        """Show tips for natural conversation"""
+        tips = f"""
+{Colors.BOLD}{Colors.BLUE}💡 Tips for chatting with me:{Colors.END}
 
-    async def handle_missing_info_state(self):
-        """Handle missing information collection"""
-        if self.current_missing_index < len(self.missing_attributes):
-            current_attr = self.missing_attributes[self.current_missing_index]
-            current_prompt = self.prompts[self.current_missing_index]
-            
-            print(f"\n{Colors.BLUE}Question {self.current_missing_index + 1} of {len(self.missing_attributes)}:{Colors.END}")
-            self.print_chat_message(current_prompt, "assistant")
-            
-            user_input = await self.get_user_input("")
-            
-            if user_input.lower() in ['quit', 'exit']:
-                return False
-            elif user_input.lower() == 'restart':
-                self.restart()
-                return True
-            elif not user_input:
-                self.print_warning("Please provide an answer.")
-                return True
-            
-            self.add_to_chat(current_prompt, "assistant")
-            self.add_to_chat(user_input, "user")
-            # Send missing attribute info to backend via Ably
-            payload = {
-                "user_id": self.user_id,
-                "missing_attribute": current_attr,
-                "user_input": user_input,
-                "extracted_info": self.extracted_info
-            }
-            print(f"[DEBUG] Publishing user-missing-info: {payload}")
-            self.response_event.clear()
-            self.query_sent_time = datetime.now()
-            await self.channel.publish("user-missing-info", payload)
-            print("[DEBUG] Waiting for agent-response event...")
-            await self.response_event.wait()
-            await asyncio.sleep(0)
-            print(f"[DEBUG] Received agent-response: {self.last_result}")
-            result = self.last_result
-            if not result:
-                self.print_error("No response from backend.")
-                return True
-            self.extracted_info = result.get("extracted_info", self.extracted_info)
-            self.current_missing_index += 1
-        else:
-            # All missing info collected, move to confirmation
-            self.conversation_state = 'confirmation'
-        
-        return True
+{Colors.GREEN}✅ Natural examples:{Colors.END}
+  • "I want to fly to Dubai next Friday"
+  • "Can you find me a cheap flight from Lahore to Karachi?"
+  • "I need business class tickets for 2 people to Islamabad"
+  • "Actually, make that return tickets instead"
 
-    async def handle_confirmation_state(self):
-        """Handle confirmation state"""
-        self.print_separator()
-        updated_info = await self.display_travel_info(self.extracted_info, editable=True)
-        if updated_info:
-            print(f"\n{Colors.YELLOW}Confirm and search for flights? (y/n){Colors.END}")
-            confirm = await self.get_user_input("")
-            if confirm.lower() in ['y', 'yes']:
-                self.add_to_chat("Perfect! Searching for flights with your confirmed details...", "assistant")
-                self.print_chat_message("Perfect! Searching for flights with your confirmed details...", "assistant")
-                print(f"{Colors.YELLOW}🔍 Searching for flights...{Colors.END}")
-                payload = {
-                    "user_id": self.user_id,
-                    "confirmed_info": updated_info
-                }
-                self.response_event.clear()
-                self.query_sent_time = datetime.now()
-                await self.channel.publish("user-confirm-info", payload)
-                await self.response_event.wait()
-                search_result = self.last_result
-                if search_result and search_result["status"] == "complete":
-                    self.conversation_state = 'complete'
-                    self.extracted_info = updated_info
-                    self.final_results = search_result
-                    # End turnaround timer
-                    self.turnaround_end_time = datetime.now()
-                    self.add_to_chat(search_result["llm_response"], "assistant")
-                    self.print_chat_message(search_result["llm_response"], "assistant")
-                else:
-                    error_msg = f"❌ Error during search: {search_result.get('message', 'Unknown error') if search_result else 'Unknown error'}"
-                    self.add_to_chat(error_msg, "assistant")
-                    self.print_chat_message(error_msg, "assistant")
-        return True
+{Colors.GREEN}✅ I understand:{Colors.END}
+  • Casual language and typos
+  • Changes of mind ("actually, let me change that...")
+  • Multiple requests in one message
+  • Questions about options and alternatives
 
-    async def handle_complete_state(self):
-        """Handle complete state"""
-        print(f"\n{Colors.BOLD}{Colors.GREEN}🎉 Flight Search Complete!{Colors.END}")
-        await self.display_travel_info(self.extracted_info, editable=False)
-        # Show turnaround time if available
-        if self.turnaround_start_time and self.turnaround_end_time:
-            turnaround = (self.turnaround_end_time - self.turnaround_start_time).total_seconds()
-            print(f"{Colors.YELLOW}Total turnaround time: {turnaround:.2f} seconds{Colors.END}")
-        print(f"\n{Colors.YELLOW}What would you like to do next?{Colors.END}")
-        print("1. Start a new search")
-        print("2. View technical details")
-        print("3. Modify current search")
-        print("4. Exit")
-        choice = await self.get_user_input("Enter your choice (1-4): ")
-        if choice == '1':
-            self.restart()
-        elif choice == '2':
-            self.show_technical_details()
-        elif choice == '3':
-            self.conversation_state = 'confirmation'
-        elif choice == '4':
-            return False
-        return True
+{Colors.GREEN}✅ You can say:{Colors.END}
+  • "That looks perfect!" (to confirm)
+  • "Can you change the date?" (to modify)
+  • "What airlines do you have?" (to ask questions)
+  • "Never mind, let's start over" (to restart)
 
-    def show_technical_details(self):
-        """Show technical details"""
-        if not self.final_results:
-            self.print_error("No results available.")
-            return
-        
-        print(f"\n{Colors.BOLD}{Colors.BLUE}🔧 Technical Details{Colors.END}")
-        self.print_separator()
-        
-        print(f"{Colors.GREEN}API Request Payload:{Colors.END}")
-        print(json.dumps(self.final_results.get("api_payload", {}), indent=2))
-        
-        print(f"\n{Colors.GREEN}Raw Flight Results:{Colors.END}")
-        print(json.dumps(self.final_results.get("flight_results", {}), indent=2))
-        
-        input(f"\n{Colors.YELLOW}Press Enter to continue...{Colors.END}")
-    
-    def restart(self):
-        """Restart the application"""
-        self.conversation_state = 'initial'
-        self.extracted_info = {}
-        self.missing_attributes = []
-        self.current_missing_index = 0
-        self.chat_history = []
-        self.final_results = None
-        self.prompts = []
-        self.turnaround_start_time = None
-        self.turnaround_end_time = None
-        print(f"{Colors.GREEN}Starting fresh! Let's plan your next trip.{Colors.END}")
+Just chat naturally - I'm here to help! 😊
+"""
+        print(tips)
     
     async def run(self):
-        """Main application loop (async)"""
-        await self.setup_ably()
-        await self.subscribe_to_responses()
+        """Main application entry point"""
         self.print_header()
-        while True:
-            try:
-                if self.conversation_state == 'initial':
-                    if not await self.handle_initial_state():
-                        break
-                elif self.conversation_state == 'missing_info':
-                    if not await self.handle_missing_info_state():
-                        break
-                elif self.conversation_state == 'confirmation':
-                    if not await self.handle_confirmation_state():
-                        break
-                elif self.conversation_state == 'complete':
-                    if not await self.handle_complete_state():
-                        break
-                print()  # Add spacing between interactions
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}Thanks for using the Travel Flight Search Assistant! ✈️{Colors.END}")
-                break
-            except Exception as e:
-                self.print_error(f"An unexpected error occurred: {str(e)}")
-                print(f"{Colors.YELLOW}Would you like to restart? (y/n){Colors.END}")
-                answer = await self.get_user_input("")
-                if answer.lower() in ['y', 'yes']:
-                    self.restart()
-                else:
-                    break
-        print(f"{Colors.CYAN}Goodbye! Safe travels! ✈️{Colors.END}")
+        self.show_conversation_tips()
+        
+        try:
+            await self.run_conversation_loop()
+        except Exception as e:
+            print(f"\n{Colors.RED}An unexpected error occurred: {str(e)}{Colors.END}")
+            print(f"{Colors.YELLOW}But don't worry - your travel assistant will be back soon!{Colors.END}")
+        finally:
+            if self.ably:
+                await self.ably.close()
+        
+        print(f"\n{Colors.CYAN}Thanks for chatting! Come back soon! ✈️{Colors.END}")
 
 def main():
-    app = TravelTerminal()
+    """Main entry point"""
+    app = ConversationalTravelTerminal()
     asyncio.run(app.run())
 
 if __name__ == "__main__":
