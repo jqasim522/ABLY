@@ -30,6 +30,8 @@ This project consists of:
 ```
 ├── extract_parameters.py      # Main travel query parser script
 ├── travel_agent.py            # Conversational travel agent logic
+├── terminal_ui.py             # terminal based ui logic
+├── travel_agent_server.py     # server used to connect terminal_ui to travel_agent using ABLY protocol
 ├── streamlit_ui.py            # Streamlit web UI for the agent
 ├── test_parameter_parsing.py  # Unit tests for parameter extraction
 ├── requirements.txt           # Python dependencies
@@ -308,10 +310,7 @@ MIT License. Feel free to use, fork, and improve!
 
 
 ## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/fasitahir/travel-query-parser/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/fasitahir/travel-query-parser/discussions)
-- **Email**: fasitahir2019@gmail.com
+- **Email**: jqasim522@gmail.com
 
 ---
 
