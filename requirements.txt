@@ -1,8 +1,11 @@
-spacy
-rapidfuzz
-autocorrect
-parsedatetime
-google-generativeai
+ably
 python-dotenv
-streamlit
 requests
+groq
+asyncio
+aiohttp
+python-dateutil
+uuid
+pytest
+pytest-asyncio
+spacy
