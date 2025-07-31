@@ -21,11 +21,6 @@ class UserSession:
         self.last_interaction = datetime.now()
     
     def update_last_interaction(self):
-        """Update the last interaction time"""
-        self.last_interaction = datetime.now()
-        self.last_interaction = datetime.now()
-    
-    def update_last_interaction(self):
         """Update the last interaction timestamp"""
         self.last_interaction = datetime.now()
 
@@ -102,6 +97,7 @@ class TravelAgentServer:
                     print(f"Error calculating turnaround time: {e}")
             
             # Send response
+            
             await self.channel.publish(EVENTS['AGENT_RESPONSE'], result)
 
         async def handle_execute_search(message):
@@ -116,7 +112,31 @@ class TravelAgentServer:
             
             # Execute the search using session's agent
             result = session.agent.execute_flight_search_with_conversation()
-            result['user_id'] = user_id
+            # print(f"🔍 Search result for user {user_id}: {type(result)} - {list(result.keys()) if isinstance(result, dict) else 'Not dict'}")
+            
+            # Ensure we have a proper response structure
+            if isinstance(result, dict):
+                result['user_id'] = user_id
+                # print(f"Result: {result}")
+                # Check if we have flight_results and log what we find
+                if 'flight_results' in result:
+                    print(f"✈️ Found flight_results in result for user {user_id}")
+                    if isinstance(result['flight_results'], dict):
+                        print(f"🔍 Flight results keys: {list(result['flight_results'].keys())}")
+                elif 'status' in result and result['status'] == 'complete':
+                    # If status is complete but no flight_results, there might be an issue
+                    print(f"⚠️ Status is complete but no flight_results found for user {user_id}")
+                    print(f"🔍 Available result keys: {list(result.keys())}")
+                
+                # Don't modify the result structure - keep it as returned by the agent
+                
+            else:
+                # Handle non-dict results
+                result = {
+                    'user_id': user_id,
+                    'status': 'error',
+                    'response': "An error occurred while searching for flights."
+                }
             
             # Calculate turnaround time
             if 'query_time' in message.data:
@@ -128,6 +148,7 @@ class TravelAgentServer:
                     print(f"Error calculating turnaround time: {e}")
             
             # Send response
+            
             await self.channel.publish(EVENTS['AGENT_RESPONSE'], result)
 
         async def handle_modify_request(message):

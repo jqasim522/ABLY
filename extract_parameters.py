@@ -375,8 +375,44 @@ def extract_flight_class(query):
     Extract flight class from query. Returns 'economy' by default.
     Supported classes: economy, business, first, premium_economy
     Uses multiple strategies with fallbacks for robust extraction.
+    Handles "Now" modification queries for flight class changes.
     """
     query_lower = query.lower()
+    
+    # Special handling for "Now" modification queries - extract class from the modification part
+    is_modification_query = " now " in query_lower or query_lower.strip().startswith("now ")
+    
+    if is_modification_query:
+        print("🔄 Detected modification query for flight class extraction")
+        
+        # Find the "Now" part and focus class extraction on it
+        if " now " in query_lower:
+            now_start = query_lower.find(" now ") + 5  # +5 to skip " now "
+        else:
+            now_start = 4  # Skip "now "
+            
+        now_part = query_lower[now_start:].strip()
+        print(f"🔍 Analyzing flight class from modification part: '{now_part}'")
+        
+        # Check if the "Now" part contains any class information
+        class_indicators = [
+            'class', 'first', 'business', 'economy', 'premium', 'coach', 'cabin',
+            'executive', 'comfort', 'standard', 'basic', 'upgrade'
+        ]
+        
+        has_class_info = any(indicator in now_part for indicator in class_indicators)
+        
+        if has_class_info:
+            # Use the "Now" part for class extraction
+            text_for_parsing = now_part
+            print(f"🔍 Found class info in modification part, using: '{text_for_parsing}'")
+        else:
+            # No class info in "Now" part, use original text to preserve existing class
+            print("🔍 No class info in modification part, using full text to preserve class")
+            text_for_parsing = query_lower
+    else:
+        # Use full text for normal queries
+        text_for_parsing = query_lower
     
     # Flight class mappings - most specific first
     class_mappings = {
@@ -413,12 +449,12 @@ def extract_flight_class(query):
     all_keywords.sort(key=lambda x: len(x[0]), reverse=True)
     
     for keyword, class_name in all_keywords:
-        if keyword in query_lower:
+        if keyword in text_for_parsing:
             return class_name
     
     # Strategy 2: NLP-based extraction using spaCy
     try:
-        doc = nlp(query_lower)
+        doc = nlp(text_for_parsing)
         
         # Look for class-related entities or patterns
         class_indicators = ["class", "cabin", "seat", "seating", "service"]
@@ -476,7 +512,7 @@ def extract_flight_class(query):
     ]
     
     for pattern, group_idx in class_patterns:
-        matches = re.findall(pattern, query_lower)
+        matches = re.findall(pattern, text_for_parsing)
         if matches:
             for match in matches:
                 extracted_class = match.strip() if isinstance(match, str) else match[group_idx-1].strip()
@@ -490,7 +526,7 @@ def extract_flight_class(query):
     try:
         # Extract potential class-related words
         class_related_words = []
-        doc = nlp(query_lower)
+        doc = nlp(text_for_parsing)
         
         for token in doc:
             if (token.pos_ in ["NOUN", "ADJ"] and 
@@ -523,10 +559,10 @@ def extract_flight_class(query):
     
     for class_name, clues in context_clues.items():
         for clue in clues:
-            if clue in query_lower:
+            if clue in text_for_parsing:
                 # Only return if there's also some flight-related context
                 flight_context = ["flight", "fly", "travel", "ticket", "book", "reserve"]
-                if any(context in query_lower for context in flight_context):
+                if any(context in text_for_parsing for context in flight_context):
                     return class_name
     
     # Strategy 6: Abbreviation detection
@@ -540,7 +576,7 @@ def extract_flight_class(query):
     
     # Look for single letter class codes
     single_letter_pattern = r'\b([fjcwy])\s+class\b'
-    matches = re.findall(single_letter_pattern, query_lower)
+    matches = re.findall(single_letter_pattern, text_for_parsing)
     if matches:
         letter = matches[0].lower()
         if letter in abbreviation_map:
@@ -815,15 +851,54 @@ def fallback_extraction(query: str) -> Dict[str, int]:
 
 def extract_dates(text, flight_type=None):
     """
-    FIXED: Date extraction function that properly handles age mentions
+    FIXED: Date extraction function that properly handles age mentions and Now modifications
     """
     original_text = text.lower()
     original_text = correct_spelling(original_text)
     today = datetime.now()
+    
+    # Special handling for "Now" modification queries - extract dates from the modification part
+    is_modification_query = " now " in original_text or original_text.strip().startswith("now ")
+    
+    if is_modification_query:
+        print("🔄 Detected modification query for date extraction")
+        
+        # Find the "Now" part and focus date extraction on it
+        if " now " in original_text:
+            now_start = original_text.find(" now ") + 5  # +5 to skip " now "
+        else:
+            now_start = 4  # Skip "now "
+            
+        now_part = original_text[now_start:].strip()
+        print(f"🔍 Analyzing date from modification part: '{now_part}'")
+        
+        # Check if the "Now" part contains any date information
+        # Look for common date indicators
+        date_indicators = [
+            'today', 'tomorrow', 'day after tomorrow', 'next', 'this', 
+            'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+            'january', 'february', 'march', 'april', 'may', 'june',
+            'july', 'august', 'september', 'october', 'november', 'december',
+            'on ', 'by ', 'at ', r'\d+', 'st', 'nd', 'rd', 'th'
+        ]
+        
+        has_date_info = any(indicator in now_part for indicator in date_indicators[:12]) or \
+                       any(re.search(pattern, now_part) for pattern in [r'\d+', r'\b(on|by|at)\b'])
+        
+        if has_date_info:
+            # Use the "Now" part for date extraction
+            text_for_parsing = now_part
+        else:
+            # No date info in "Now" part, use original text to preserve existing dates
+            print("🔍 No date info in modification part, using full text to preserve dates")
+            text_for_parsing = original_text
+    else:
+        # Use full text for normal queries
+        text_for_parsing = original_text
 
     # FIXED: Remove age mentions before parsing dates to prevent confusion
     # Remove patterns like "10 year old", "1 year old", etc.
-    text_cleaned = re.sub(r'\b\d+\s+years?\s+old\b', '', original_text)
+    text_cleaned = re.sub(r'\b\d+\s+years?\s+old\b', '', text_for_parsing)
     text_cleaned = re.sub(r'\b\d+\s+year\s+old\b', '', text_cleaned)
     
     # ADDED: Remove month age mentions like "15 month", "18 months old", etc.
@@ -842,9 +917,9 @@ def extract_dates(text, flight_type=None):
     normalized_text = text_fixed.strip().lower()
     dates = []
 
-    # Auto-detect flight type if not provided
+    # Auto-detect flight type if not provided - use original text for flight type detection
     if flight_type is None:
-        flight_type = extract_flight_type(text)
+        flight_type = extract_flight_type(text)  # Use original text, not the modification part
 
     # ---- RETURN FLIGHT HANDLING ---- #
     if flight_type == "return":
@@ -984,39 +1059,54 @@ def extract_dates(text, flight_type=None):
 
         # FIXED: Parse with age filtering - also look for relative date patterns
         relative_date_patterns = [
-            r'\bnext\s+(\w+day)\b',  # next thursday, next monday, etc.
-            r'\bthis\s+(\w+day)\b',  # this friday, this saturday, etc.
-            r'\b(\w+day)\s+next\b',  # thursday next, friday next, etc.
+            (r'\bnext\s+(\w+day)\b', 'next'),    # next thursday, next monday, etc.
+            (r'\bthis\s+(\w+day)\b', 'this'),    # this friday, this saturday, etc.
+            (r'\b(\w+day)\s+next\b', 'next'),    # thursday next, friday next, etc.
         ]
         
-        for pattern in relative_date_patterns:
+        for pattern, prefix in relative_date_patterns:
             matches = re.findall(pattern, normalized_text)
             for match in matches:
                 try:
                     cal = parsedatetime.Calendar()
                     if isinstance(match, tuple):
-                        date_phrase = ' '.join(match)
+                        day_name = match[0]
                     else:
-                        date_phrase = f"next {match}" if pattern.startswith(r'\b(\w+day)') else f"next {match}"
+                        day_name = match
+                    
+                    # Construct the proper date phrase based on the prefix
+                    if prefix == 'this':
+                        date_phrase = f"this {day_name}"
+                    else:  # prefix == 'next'
+                        date_phrase = f"next {day_name}"
+                    
+                    print(f"🔍 Parsing relative date: '{date_phrase}' from text: '{normalized_text}'")
                     
                     time_struct, parse_status = cal.parse(date_phrase)
                     if parse_status >= 1:
                         parsed_date = datetime(*time_struct[:6])
+                        print(f"✅ Parsed '{date_phrase}' to: {parsed_date.strftime('%Y-%m-%d')}")
                         if parsed_date.year <= today.year + 2:
                             return parsed_date.strftime("%Y-%m-%d")
-                except:
+                except Exception as e:
+                    print(f"❌ Error parsing '{date_phrase}': {e}")
                     pass
 
         # FIXED: Parse with age filtering
         try:
             cal = parsedatetime.Calendar()
+            print(f"🔍 Final parsing attempt with: '{normalized_text}'")
             time_struct, parse_status = cal.parse(normalized_text)
             if parse_status >= 1:
                 parsed_date = datetime(*time_struct[:6])
+                print(f"✅ Final parsed date: {parsed_date.strftime('%Y-%m-%d')} (today is {today.strftime('%Y-%m-%d')})")
                 # FIXED: Ensure the parsed date is reasonable (not affected by age mentions)
                 if parsed_date.year <= today.year + 2:
                     return parsed_date.strftime("%Y-%m-%d")
-        except:
+                else:
+                    print(f"❌ Date rejected - too far in future: {parsed_date.year}")
+        except Exception as e:
+            print(f"❌ Final parsing failed: {e}")
             pass
 
         return None

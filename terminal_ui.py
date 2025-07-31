@@ -53,6 +53,8 @@ class ConversationalTravelTerminal:
         self.ably = None
         self.channel = None
         self.user_id = str(uuid.uuid4())
+        self.connection_state = "initialized"
+        self.last_heartbeat = datetime.now()
         
         self.response_event = asyncio.Event()
         self.last_response = None
@@ -62,53 +64,239 @@ class ConversationalTravelTerminal:
         if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
             Colors.disable()
             
-    async def setup_ably(self):
-        """Initialize Ably connection"""
+    def _format_flight_results(self, results):
+        """Format flight search results for display"""
+        if not results:
+            return None
+            
         try:
-            self.ably = AblyRealtime(ABLY_API_KEY)
-            self.channel = self.ably.channels.get(CHANNEL_NAME)
-            await self.subscribe_to_responses()
-            print(f"{Colors.GREEN}✓ Connected to travel agent service{Colors.END}\n")
+            formatted_parts = ["📋 Here are the flights I found for you:"]
+            
+            # Handle direct API response structure
+            if isinstance(results, dict):
+                # Multiple providers case
+                if 'providers' in results:
+                    for provider, flights in results['providers'].items():
+                        if flights and isinstance(flights, list):
+                            formatted_parts.append(f"\n🏢 {provider.replace('_', ' ').title()}:")
+                            for flight in flights[:3]:  # Show top 3 flights per airline
+                                flight_info = self._format_single_flight(flight)
+                                if flight_info:
+                                    formatted_parts.append(flight_info)
+                                    
+                # Single airline case
+                elif 'flights' in results:
+                    flights = results['flights']
+                    if isinstance(flights, list):
+                        for flight in flights[:5]:  # Show top 5 flights
+                            flight_info = self._format_single_flight(flight)
+                            if flight_info:
+                                formatted_parts.append(flight_info)
+                                
+            # Handle list of flights
+            elif isinstance(results, list):
+                for flight in results[:5]:  # Show top 5 flights
+                    flight_info = self._format_single_flight(flight)
+                    if flight_info:
+                        formatted_parts.append(flight_info)
+                        
+            if len(formatted_parts) > 1:
+                formatted_parts.append("\nWould you like more details about any of these flights?")
+                return "\n".join(formatted_parts)
+            return None
+            
         except Exception as e:
-            print(f"{Colors.RED}Failed to connect to travel agent service: {str(e)}{Colors.END}")
-            raise
+            print(f"Error formatting results: {e}")
+            return None
+            
+    def _format_single_flight(self, flight):
+        """Format a single flight entry"""
+        try:
+            if not isinstance(flight, dict):
+                return None
+                
+            # Extract common flight details
+            flight_no = flight.get('flight_number') or flight.get('FlightNumber', 'N/A')
+            departure_time = flight.get('departure_time') or flight.get('DepartureTime', 'N/A')
+            arrival_time = flight.get('arrival_time') or flight.get('ArrivalTime', 'N/A')
+            price = flight.get('price') or flight.get('Price', 'N/A')
+            airline = flight.get('airline') or flight.get('Airline', 'N/A')
+            
+            if isinstance(price, (int, float)):
+                price = f"PKR {price:,.0f}"
+            
+            return (f"  ✈️ {airline} {flight_no}\n"
+                   f"     🕒 {departure_time} → {arrival_time}\n"
+                   f"     💰 {price}")
+        except Exception as e:
+            print(f"Error formatting flight: {e}")
+            return None
+        
+        # Ably specific attributes
+        self.ably = None
+        self.channel = None
+        self.user_id = str(uuid.uuid4())
+        self.connection_state = "initialized"
+        self.last_heartbeat = datetime.now()
+        
+        self.response_event = asyncio.Event()
+        self.last_response = None
+        self.current_booking_info = {}
+        
+        # Check if terminal supports colors
+        if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+            Colors.disable()
+            
+    async def setup_ably(self, max_retries=3):
+        """Initialize Ably connection with connection monitoring"""
+        async def connection_state_change(state_change):
+            self.connection_state = state_change.current
+            print(f"{Colors.CYAN}Connection state changed to: {self.connection_state}{Colors.END}")
+            
+            if state_change.current == "connected":
+                self.last_heartbeat = datetime.now()
+            elif state_change.current in ["failed", "suspended", "disconnected"]:
+                print(f"{Colors.YELLOW}Connection state: {state_change.current}. Attempting to reconnect...{Colors.END}")
+                await self.try_reconnect()
+        
+        retries = 0
+        while retries < max_retries:
+            try:
+                if self.ably:
+                    await self.ably.close()
+                    
+                self.ably = AblyRealtime(ABLY_API_KEY)
+                self.ably.connection.on('state_change', connection_state_change)
+                self.channel = self.ably.channels.get(CHANNEL_NAME)
+                
+                await self.subscribe_to_responses()
+                self.connection_state = "connected"
+                self.last_heartbeat = datetime.now()
+                print(f"{Colors.GREEN}✓ Connected to travel agent service{Colors.END}\n")
+                return
+                
+            except Exception as e:
+                retries += 1
+                if retries < max_retries:
+                    wait_time = retries * 2  # Exponential backoff
+                    print(f"{Colors.YELLOW}Connection attempt {retries} failed: {str(e)}")
+                    print(f"Retrying in {wait_time} seconds...{Colors.END}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"{Colors.RED}Failed to connect after {max_retries} attempts: {str(e)}{Colors.END}")
+                    raise
+                    
+    async def try_reconnect(self):
+        """Attempt to reconnect to Ably"""
+        try:
+            if self.ably and not self.ably.connection.state == "connected":
+                print(f"{Colors.YELLOW}Attempting to reconnect...{Colors.END}")
+                await self.setup_ably(max_retries=1)
+        except Exception as e:
+            print(f"{Colors.RED}Reconnection failed: {str(e)}{Colors.END}")
 
     async def subscribe_to_responses(self):
         """Subscribe to agent responses"""
+        print("Subscribing to agent responses...")
         async def response_handler(message):
-            if message.data.get('user_id') == self.user_id:
-                self.last_response = message.data
-                if 'current_info' in message.data:
-                    self.current_booking_info = message.data['current_info']
-                self.response_event.set()
+            try:
+                print(f"DEBUG: Received message with data: {message.data}")
+                if message.data.get('user_id') == self.user_id:
+                    print(f"DEBUG: Message matches user_id: {self.user_id}")
+                    self.last_response = message.data
+                    
+                    # Log flight results if present
+                    if 'flight_results' in message.data:
+                        print(f"DEBUG: Flight results found in response: {message.data['flight_results']}")
+                    elif 'response' in message.data and isinstance(message.data['response'], dict):
+                        print(f"DEBUG: Flight results in response field: {message.data['response']}")
+                    
+                    # Only update booking info if it's valid
+                    if 'current_info' in message.data:
+                        new_info = message.data['current_info']
+                        print(f"DEBUG: Updating booking info with: {new_info}")
+                        
+                        # Ensure we don't lose passenger info
+                        if ('passengers' in self.current_booking_info and 
+                            'passengers' not in new_info and 
+                            new_info.get('total_passengers')):
+                            new_info['passengers'] = self.current_booking_info['passengers']
+                            
+                        self.current_booking_info = new_info
+                    
+                    self.response_event.set()
+            except Exception as e:
+                print(f"{Colors.RED}Error handling response: {str(e)}{Colors.END}")
 
         await self.channel.subscribe(EVENTS['AGENT_RESPONSE'], response_handler)
 
     async def send_to_agent(self, event_name: str, payload: dict) -> dict:
-        """Send message to agent via Ably and wait for response"""
-        try:
-            self.response_event.clear()
-            start_time = datetime.now()
-            payload['user_id'] = self.user_id
-            payload['query_time'] = start_time.isoformat()
-            
-            await self.channel.publish(event_name, payload)
-            await asyncio.wait_for(self.response_event.wait(), timeout=30)  # 30 second timeout
-            
-            end_time = datetime.now()
-            turnaround_time = (end_time - start_time).total_seconds()
-            
-            if isinstance(self.last_response, dict):
-                self.last_response['turnaround_time'] = turnaround_time
-            
-            return self.last_response
-        except asyncio.TimeoutError:
-            return {
-                "response": "I apologize, but I'm having trouble connecting to the travel agent service. Please try again.",
-                "type": "error",
-                "current_info": self.current_booking_info,
-                "turnaround_time": 30  # Timeout duration
-            }
+        """Send message to agent via Ably and wait for response with retry logic"""
+        max_retries = 2  # Increased retries to handle temporary issues
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # Check connection state and debug logging
+                
+                if self.connection_state != "connected":
+                    
+                    await self.try_reconnect()
+                    if self.connection_state != "connected":
+                        raise Exception("Failed to establish connection")
+                
+                # Clear previous response and prepare payload
+                self.response_event.clear()
+                start_time = datetime.now()
+                
+                # Deep copy payload to prevent mutations
+                payload_copy = json.loads(json.dumps(payload))
+                payload_copy['user_id'] = self.user_id
+                payload_copy['query_time'] = start_time.isoformat()
+                
+                # Send message and wait for response
+               
+                await self.channel.publish(event_name, payload_copy)
+                
+                
+                await asyncio.wait_for(self.response_event.wait(), timeout=30)
+                
+                end_time = datetime.now()
+                turnaround_time = (end_time - start_time).total_seconds()
+                print(f"DEBUG: Response received in {turnaround_time:.2f} seconds")
+                
+                if isinstance(self.last_response, dict):
+                    
+                    self.last_response['turnaround_time'] = turnaround_time
+                    self.last_heartbeat = datetime.now()
+                    return self.last_response
+                else:
+                    print(f"DEBUG: Unexpected response type: {type(self.last_response)}")
+                    
+            except asyncio.TimeoutError:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    wait_time = retry_count * 2
+                    self.print_chat_message("Just a moment, I'm still working on your request...", "assistant")
+                    await asyncio.sleep(wait_time)
+                    continue
+                    
+            except Exception as e:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    wait_time = retry_count * 2
+                    self.print_chat_message("I'm having a bit of trouble, but I'll try again in a moment...", "assistant")
+                    await asyncio.sleep(wait_time)
+                    continue
+        
+        # All retries failed
+        return {
+            "response": "I apologize, but I'm having trouble maintaining a stable connection to the travel agent service. Please try again in a moment.",
+            "type": "error",
+            "current_info": self.current_booking_info,
+            "turnaround_time": 30
+        }
+        
     
     def print_header(self):
         """Print the application header"""
@@ -325,16 +513,76 @@ Ready to plan your next adventure? Just tell me where you'd like to go! 🌍"""
             # User confirmed, proceed with search
             self.awaiting_confirmation = False
             self.confirmation_shown = False
+            
+            # Show searching message
+            self.print_chat_message("🔍 Searching for flights across all available airlines...", "assistant")
+            
             result = await self.send_to_agent(EVENTS['EXECUTE_SEARCH'], {
                 "current_info": self.current_booking_info
             })
             
-            if result.get("status") == "complete":
-                self.search_completed = True
+            # Enhanced debugging for flight data
+           
+            if isinstance(result, dict):
+                
+                for key, value in result.items():
+                    # print(f"DEBUG: {key}: {type(value)} - {str(value)[:100] if isinstance(value, str) else value}")
+                    pass
+            
+            self.search_completed = True
+            
+            if isinstance(result, dict):
+                # Look for flight data in multiple possible locations
+                flight_data = None
+                
+                # Priority order for finding flight data
+                if "flight_results" in result:
+                    flight_data = result["flight_results"]
+                    
+                elif "flights" in result:
+                    flight_data = result["flights"]
+                    
+                elif "response" in result and isinstance(result["response"], dict):
+                    # Check if response contains flight data
+                    response_data = result["response"]
+                    if any(key in response_data for key in ["flights", "providers", "Itineraries", "data"]):
+                        flight_data = response_data
+                    
+                
+                # If we found flight data, try to format it
+                if flight_data:
+                    
+                    formatted_results = self._format_flight_results(flight_data)
+                    if formatted_results:
+                        
+                        self.print_chat_message(formatted_results, "assistant", result.get("turnaround_time"))
+                        return
+                    else:
+                        print(f"DEBUG: Failed to format flight results")
+                
+                # If we have a text response, show it
+                if "response" in result and isinstance(result["response"], str):
+                    print(f"DEBUG: Showing text response")
+                    self.print_chat_message(result["response"], "assistant", result.get("turnaround_time"))
+                    return
+                
+                # If we have status complete but no flight data, there might be an issue
+                if result.get("status") == "complete":
+                    print(f"DEBUG: Status is complete but no flight data found")
+                    if result.get("type") == "search_complete":
+                        # This should have flight results, something went wrong
+                        self.print_chat_message(
+                            "I completed the flight search, but I'm having trouble displaying the results right now. The search was successful though! Can you please try again?",
+                            "assistant",
+                            result.get("turnaround_time")
+                        )
+                        return
+            
+            # Fallback message if nothing else worked
+            print(f"DEBUG: Using fallback message")
             self.print_chat_message(
-                result["response"], 
-                "assistant",
-                result.get("turnaround_time")
+                "I wasn't able to find any flights matching your criteria. Would you like to try different dates or airlines?",
+                "assistant"
             )
         
         elif intent in ["request_modification", "modify_details"]:
