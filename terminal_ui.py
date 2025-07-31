@@ -200,9 +200,9 @@ class ConversationalTravelTerminal:
         print("Subscribing to agent responses...")
         async def response_handler(message):
             try:
-                print(f"DEBUG: Received message with data: {message.data}")
+                
                 if message.data.get('user_id') == self.user_id:
-                    print(f"DEBUG: Message matches user_id: {self.user_id}")
+                   
                     self.last_response = message.data
                     
                     # Log flight results if present
@@ -214,7 +214,6 @@ class ConversationalTravelTerminal:
                     # Only update booking info if it's valid
                     if 'current_info' in message.data:
                         new_info = message.data['current_info']
-                        print(f"DEBUG: Updating booking info with: {new_info}")
                         
                         # Ensure we don't lose passenger info
                         if ('passengers' in self.current_booking_info and 
@@ -263,7 +262,7 @@ class ConversationalTravelTerminal:
                 
                 end_time = datetime.now()
                 turnaround_time = (end_time - start_time).total_seconds()
-                print(f"DEBUG: Response received in {turnaround_time:.2f} seconds")
+                print(f"Response received in {turnaround_time:.2f} seconds")
                 
                 if isinstance(self.last_response, dict):
                     
