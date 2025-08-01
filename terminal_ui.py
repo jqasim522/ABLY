@@ -67,85 +67,253 @@ class ConversationalTravelTerminal:
     def _format_flight_results(self, results):
         """Format flight search results for display"""
         if not results:
+            print("DEBUG: No results provided to format")
             return None
             
         try:
             formatted_parts = ["📋 Here are the flights I found for you:"]
+            flights_added = 0
             
-            # Handle direct API response structure
+            # print(f"DEBUG: Formatting results of type: {type(results)}")
+            
+            # Handle the simplified flight results structure from server
             if isinstance(results, dict):
-                # Multiple providers case
-                if 'providers' in results:
-                    for provider, flights in results['providers'].items():
-                        if flights and isinstance(flights, list):
-                            formatted_parts.append(f"\n🏢 {provider.replace('_', ' ').title()}:")
-                            for flight in flights[:3]:  # Show top 3 flights per airline
-                                flight_info = self._format_single_flight(flight)
-                                if flight_info:
-                                    formatted_parts.append(flight_info)
-                                    
-                # Single airline case
-                elif 'flights' in results:
+                # print(f"DEBUG: Results keys: {list(results.keys())}")
+                
+                # Check for simplified flights structure
+                if 'flights' in results and isinstance(results['flights'], list):
                     flights = results['flights']
-                    if isinstance(flights, list):
-                        for flight in flights[:5]:  # Show top 5 flights
-                            flight_info = self._format_single_flight(flight)
+                    # print(f"DEBUG: Found {len(flights)} simplified flights")
+                    
+                    if flights:
+                        total_flights = results.get('total_flights', len(flights))
+                        successful_airlines = results.get('successful_airlines', 1)
+                        
+                        formatted_parts.append(f"\n🔍 Found {total_flights} flight options across {successful_airlines} airlines:")
+                        
+                        for i, flight in enumerate(flights, 1):
+                            flight_info = self._format_simplified_flight(flight, i)
                             if flight_info:
                                 formatted_parts.append(flight_info)
-                                
-            # Handle list of flights
+                                flights_added += 1
+                            else:
+                                print(f"DEBUG: Failed to format flight {i}")
+                
+                # Handle other possible structures (fallback)
+                elif 'successful_results' in results:
+                    print("DEBUG: Found 'successful_results' structure - using fallback")
+                    return "✈️ Flight search completed successfully! I found several options but had trouble displaying them. Please try your search again."
+                    
+            # Handle list of flights (fallback)
             elif isinstance(results, list):
-                for flight in results[:5]:  # Show top 5 flights
-                    flight_info = self._format_single_flight(flight)
+                print(f"DEBUG: Results is a list with {len(results)} items")
+                formatted_parts.append(f"\n🔍 Found {len(results)} flight options:")
+                
+                for i, flight in enumerate(results[:5], 1):
+                    flight_info = self._format_simplified_flight(flight, i)
                     if flight_info:
                         formatted_parts.append(flight_info)
+                        flights_added += 1
                         
-            if len(formatted_parts) > 1:
-                formatted_parts.append("\nWould you like more details about any of these flights?")
+            # print(f"DEBUG: Successfully formatted {flights_added} flights")
+            
+            if flights_added > 0:
+                formatted_parts.append(f"\n💡 Would you like more details about any of these flights or search with different criteria?")
                 return "\n".join(formatted_parts)
-            return None
-            
+            else:
+                print("DEBUG: No flights were successfully formatted")
+                return "✈️ Flight search completed but I couldn't display the results properly. Please try your search again."
+                
         except Exception as e:
-            print(f"Error formatting results: {e}")
-            return None
-            
-    def _format_single_flight(self, flight):
-        """Format a single flight entry"""
+            print(f"ERROR: Exception in _format_flight_results: {e}")
+            import traceback
+            traceback.print_exc()
+            return "✈️ Flight search was successful but I had trouble formatting the results. Please try again."
+
+    def _format_simplified_flight(self, flight, flight_number):
+        """Format a simplified flight entry from the server"""
         try:
             if not isinstance(flight, dict):
+                print(f"DEBUG: Flight is not a dict: {type(flight)}")
                 return None
-                
-            # Extract common flight details
-            flight_no = flight.get('flight_number') or flight.get('FlightNumber', 'N/A')
-            departure_time = flight.get('departure_time') or flight.get('DepartureTime', 'N/A')
-            arrival_time = flight.get('arrival_time') or flight.get('ArrivalTime', 'N/A')
-            price = flight.get('price') or flight.get('Price', 'N/A')
-            airline = flight.get('airline') or flight.get('Airline', 'N/A')
             
-            if isinstance(price, (int, float)):
-                price = f"PKR {price:,.0f}"
+            # print(f"DEBUG: Formatting simplified flight {flight_number} with keys: {list(flight.keys())}")
             
-            return (f"  ✈️ {airline} {flight_no}\n"
-                   f"     🕒 {departure_time} → {arrival_time}\n"
-                   f"     💰 {price}")
+            # Extract data from simplified flight structure
+            flight_no = flight.get('flight_number', 'N/A')
+            airline = flight.get('airline', 'Unknown')
+            departure_time = flight.get('departure_time', 'N/A')
+            arrival_time = flight.get('arrival_time', 'N/A')
+            price = flight.get('price', 'N/A')
+            origin = flight.get('origin', '')
+            destination = flight.get('destination', '')
+            
+            # Format price
+            if isinstance(price, (int, float)) and price != 'N/A':
+                price_str = f"PKR {price:,.0f}"
+            else:
+                price_str = "Price on request"
+            
+            # Build the formatted string
+            header = f"  ✈️ Flight {flight_number}: {airline} {flight_no}"
+            time_info = f"     🕒 {departure_time} → {arrival_time}"
+            price_info = f"     💰 {price_str}"
+            
+            result_parts = [header, time_info, price_info]
+            
+            # Add route if available
+            if origin and destination:
+                route_info = f"     📍 {origin} → {destination}"
+                result_parts.insert(1, route_info)
+            
+            # Add fare type if available
+            if flight.get('fare_name'):
+                fare_info = f"     🎫 {flight['fare_name']}"
+                result_parts.append(fare_info)
+            
+            return "\n".join(result_parts)
+            
         except Exception as e:
-            print(f"Error formatting flight: {e}")
+            print(f"ERROR: Exception in _format_simplified_flight: {e}")
+            print(f"DEBUG: Flight data was: {flight}")
             return None
-        
-        # Ably specific attributes
-        self.ably = None
-        self.channel = None
-        self.user_id = str(uuid.uuid4())
-        self.connection_state = "initialized"
-        self.last_heartbeat = datetime.now()
-        
-        self.response_event = asyncio.Event()
-        self.last_response = None
-        self.current_booking_info = {}
-        
-        # Check if terminal supports colors
-        if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
-            Colors.disable()
+
+    def _format_single_flight(self, flight, flight_number=None):
+        """Format a single flight entry with better error handling and data extraction"""
+        try:
+            if not isinstance(flight, dict):
+                print(f"DEBUG: Flight is not a dict: {type(flight)}")
+                return None
+            
+            print(f"DEBUG: Formatting flight with keys: {list(flight.keys())}")
+            
+            # Initialize variables
+            flight_no = 'N/A'
+            departure_time = 'N/A'
+            arrival_time = 'N/A'
+            price = 'N/A'
+            airline = 'N/A'
+            route = ''
+            
+            # Handle BookMeSky API Itinerary structure
+            if 'Segments' in flight:
+                segments = flight.get('Segments', [])
+                if segments:
+                    first_segment = segments[0]
+                    
+                    # Extract flight details from segment
+                    operating_carrier = first_segment.get('OperatingCarrier', {})
+                    airline = operating_carrier.get('name', operating_carrier.get('iata', 'Unknown'))
+                    flight_no = f"{operating_carrier.get('iata', '')}-{first_segment.get('FlightNumber', '')}"
+                    
+                    # Extract times
+                    departure_time = self._format_api_time(first_segment.get('DepartureAt', ''))
+                    arrival_time = self._format_api_time(first_segment.get('ArrivalAt', ''))
+                    
+                    # Extract route
+                    from_airport = first_segment.get('From', {})
+                    to_airport = first_segment.get('To', {})
+                    route = f"{from_airport.get('iata', '')} → {to_airport.get('iata', '')}"
+                
+                # Extract fare information from parent flight
+                fares = flight.get('Fares', [])
+                if fares:
+                    # Get the cheapest fare
+                    cheapest_fare = min(fares, key=lambda x: x.get('ChargedTotalPrice', 999999))
+                    price = cheapest_fare.get('ChargedTotalPrice', 'N/A')
+                    if isinstance(price, (int, float)):
+                        price = f"PKR {price:,.0f}"
+            
+            # Handle aggregated flight structure (from your agent's processing)
+            else:
+                # Try multiple field names for each piece of data
+                flight_no = (flight.get('flight_number') or 
+                            flight.get('FlightNumber') or 
+                            flight.get('flightNumber') or 
+                            flight.get('number') or 'N/A')
+                
+                departure_time = (flight.get('departure_time') or 
+                                flight.get('DepartureTime') or 
+                                flight.get('departureTime') or 
+                                flight.get('departure') or 'N/A')
+                
+                arrival_time = (flight.get('arrival_time') or 
+                            flight.get('ArrivalTime') or 
+                            flight.get('arrivalTime') or 
+                            flight.get('arrival') or 'N/A')
+                
+                # Try multiple price field names
+                price = (flight.get('price') or 
+                        flight.get('Price') or 
+                        flight.get('fare') or 
+                        flight.get('Fare') or 
+                        flight.get('total_fare') or 
+                        flight.get('Total_Fare') or 
+                        flight.get('ChargedTotalPrice') or 
+                        flight.get('totalPrice') or 
+                        flight.get('cost') or 'N/A')
+                
+                airline = (flight.get('airline') or 
+                        flight.get('Airline') or 
+                        flight.get('carrier') or 
+                        flight.get('source_airline') or 'N/A')
+                
+                # Build route if available
+                origin = flight.get('origin') or flight.get('from') or flight.get('source')
+                destination = flight.get('destination') or flight.get('to') or flight.get('dest')
+                if origin and destination:
+                    route = f"{origin} → {destination}"
+            
+            # Format price
+            if isinstance(price, (int, float)) and price != 'N/A':
+                price = f"PKR {price:,.0f}"
+            elif price == 'N/A' or not price:
+                price = "Price on request"
+            
+            # Build the formatted string
+            if flight_number:
+                header = f"  ✈️ Flight {flight_number}: {airline} {flight_no}"
+            else:
+                header = f"  ✈️ {airline} {flight_no}"
+            
+            time_info = f"     🕒 {departure_time} → {arrival_time}"
+            price_info = f"     💰 {price}"
+            
+            result_parts = [header, time_info, price_info]
+            
+            # Add route if available and not redundant
+            if route and route not in header:
+                result_parts.insert(1, f"     📍 {route}")
+            
+            return "\n".join(result_parts)
+            
+        except Exception as e:
+            print(f"ERROR: Exception in _format_single_flight: {e}")
+            print(f"DEBUG: Flight data was: {flight}")
+            return None
+    
+
+    def _format_api_time(self, datetime_str):
+        """Format API datetime string to HH:MM format"""
+        try:
+            if datetime_str:
+                # Handle ISO format: 2025-08-04T17:30:00+05:00
+                from datetime import datetime
+                if 'T' in datetime_str:
+                    # Remove timezone info for parsing if present
+                    clean_time = datetime_str.split('+')[0].split('-')[0] if '+' in datetime_str else datetime_str
+                    if clean_time.count('-') >= 2:  # Full datetime
+                        dt = datetime.fromisoformat(clean_time.replace('Z', ''))
+                        return dt.strftime('%H:%M')
+                    else:  # Just time part
+                        time_part = datetime_str.split('T')[1].split('+')[0].split('Z')[0]
+                        return time_part[:5]  # HH:MM
+                elif ':' in datetime_str:
+                    # Already in time format
+                    return datetime_str[:5]  # Just take HH:MM part
+        except Exception as e:
+            print(f"DEBUG: Error formatting time '{datetime_str}': {e}")
+        return datetime_str if datetime_str else 'N/A'
             
     async def setup_ably(self, max_retries=3):
         """Initialize Ably connection with connection monitoring"""
@@ -204,10 +372,11 @@ class ConversationalTravelTerminal:
                 if message.data.get('user_id') == self.user_id:
                    
                     self.last_response = message.data
-                    
+                    # print(f"{Colors.CYAN}Received response from agent: {message.data.get('response', 'No response text')}{Colors.END}")
                     # Log flight results if present
                     if 'flight_results' in message.data:
-                        print(f"DEBUG: Flight results found in response: {message.data['flight_results']}")
+                        # print(f"DEBUG: Flight results found in response: {message.data['flight_results']}")
+                        None
                     elif 'response' in message.data and isinstance(message.data['response'], dict):
                         print(f"DEBUG: Flight results in response field: {message.data['response']}")
                     
@@ -262,7 +431,7 @@ class ConversationalTravelTerminal:
                 
                 end_time = datetime.now()
                 turnaround_time = (end_time - start_time).total_seconds()
-                print(f"Response received in {turnaround_time:.2f} seconds")
+                # print(f"Response received in {turnaround_time:.2f} seconds")
                 
                 if isinstance(self.last_response, dict):
                     
