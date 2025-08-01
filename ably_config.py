@@ -1,6 +1,6 @@
 """Ably configuration"""
 # Replace with your Ably API key
-ABLY_API_KEY = "wy5x6w.3ECUmg:SoTIivChQwX67WHjV9fG2BuHUA9_jGjscVwZXRzCDfA"
+ABLY_API_KEY = "Your ABLY KEY" #Add your ABLY API KEY Here
 
 # Channel names
 CHANNEL_NAME = "travel-agent"
