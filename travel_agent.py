@@ -641,7 +641,7 @@ Keep it short and conversational:
             # Generate conversational results presentation
             results_response = self.generate_flight_results_response(flight_results, search_type)
             self.add_to_conversation(results_response, "assistant")
-            
+            # return results_response
             return {
                 "response": f"{search_start_msg}\n\n{results_response}",
                 "type": "search_complete",
@@ -1176,7 +1176,7 @@ Keep it conversational and informative:
             return f"I found some flight options but had trouble formatting them. The search was successful though!"
 
     def format_extracted_flights_display(self, extracted_flights):
-        """Format extracted flight information for clean display"""
+        """Format extracted flight information for compact display"""
         try:
             if not extracted_flights:
                 return "No flight information could be extracted."
@@ -1184,28 +1184,37 @@ Keep it conversational and informative:
             display_text = "🛫 **Flight Options Found:**\n\n"
             
             for i, flight in enumerate(extracted_flights[:5], 1):  # Show top 5 flights
-                display_text += f"**Flight {i}: {flight['airline']} {flight['flight_number']}**\n"
-                display_text += f"📍 {flight['origin']} → {flight['destination']}\n"
-                display_text += f"🕐 {flight['departure_time']} → {flight['arrival_time']} ({flight['duration']})\n"
+                # Header with airline and flight number
+                display_text += f"✈️ **Flight {i}: {flight['airline']} {flight['flight_number']}**\n"
                 
-                # Display fare options
+                # Route, time and duration on one line
+                route_time = f"📍 {flight['origin']} → {flight['destination']} 🕐 {flight['departure_time']} → {flight['arrival_time']}"
+                if flight.get('duration'):
+                    route_time += f" ({flight['duration']})"
+                display_text += route_time + "\n"
+                
+                # Display fare options in compact format
                 if flight.get('fare_options'):
-                    display_text += f"💰 **Fare Options:**\n"
+                    display_text += "💰 **Fare Options:**\n"
                     
                     for fare in flight['fare_options']:
+                        # Baggage info
                         baggage_info = f"Hand: {fare['hand_baggage_kg']}kg"
                         if fare['checked_baggage_kg'] > 0:
                             baggage_info += f" | Checked: {fare['checked_baggage_kg']}kg"
                         else:
                             baggage_info += " | No checked baggage"
                         
-                        refund_info = ""
-                        if fare['refundable_before_48h']:
-                            refund_info = f" | Refund fee: PKR {fare['refund_fee_48h']}"
+                        # Refund info
+                        if fare['refundable_before_48h'] and fare['refund_fee_48h'] > 0:
+                            refund_info = f"Refund fee: PKR {fare['refund_fee_48h']}"
+                        elif fare['refundable_before_48h']:
+                            refund_info = "Refundable"
                         else:
-                            refund_info = " | Non-refundable"
+                            refund_info = "Non-refundable"
                         
-                        display_text += f"   • **{fare['fare_name']}**: PKR {fare['total_fare']:,} ({baggage_info}{refund_info})\n"
+                        # Complete fare line
+                        display_text += f"   • **{fare['fare_name']}**: PKR {fare['total_fare']:,} ({baggage_info} | {refund_info})\n"
                 
                 display_text += "\n"
             
@@ -1218,8 +1227,9 @@ Keep it conversational and informative:
             print(f"Error formatting extracted flights: {e}")
             return "Flight information found but could not be formatted properly."
 
+        
     def format_single_airline_display(self, flights_data, airline_name):
-        """Format single airline flight data for display"""
+        """Format single airline flight data for compact display"""
         try:
             display_text = f"Here are the available flights with {airline_name}:\n\n"
             
@@ -1233,15 +1243,26 @@ Keep it conversational and informative:
             for i, flight in enumerate(segments[:5], 1):
                 display_text += f"✈️ **Option {i}:**\n"
                 
+                # Extract flight details
                 price = flight.get('price', flight.get('totalPrice', flight.get('cost', 'N/A')))
-                departure_time = flight.get('departureTime', flight.get('departure', 'N/A'))
-                arrival_time = flight.get('arrivalTime', flight.get('arrival', 'N/A'))
-                duration = flight.get('duration', flight.get('flightDuration', 'N/A'))
+                departure_time = flight.get('departure_time', flight.get('departureTime', flight.get('departure', 'N/A')))
+                arrival_time = flight.get('arrival_time', flight.get('arrivalTime', flight.get('arrival', 'N/A')))
+                duration = flight.get('duration', flight.get('flightDuration', ''))
+                origin = flight.get('origin', flight.get('source', ''))
+                destination = flight.get('destination', flight.get('dest', ''))
                 
-                display_text += f"   💰 Price: PKR {price}\n"
-                display_text += f"   🛫 Departure: {departure_time}\n"
-                display_text += f"   🛬 Arrival: {arrival_time}\n"
-                display_text += f"   ⏱️ Duration: {duration}\n\n"
+                # Format route and time on one line
+                route_time = f"📍 {origin} → {destination} 🕐 {departure_time} → {arrival_time}"
+                if duration:
+                    route_time += f" ({duration})"
+                
+                # Format price
+                if isinstance(price, (int, float)) and price != 'N/A':
+                    price_text = f"PKR {price:,}"
+                else:
+                    price_text = str(price)
+                
+                display_text += f"{route_time} 💰 {price_text}\n\n"
                 
             return display_text
             
@@ -1249,13 +1270,14 @@ Keep it conversational and informative:
             return f"Found flights with {airline_name} but couldn't display all details."
 
     def format_multi_airline_display(self, flights, total_flights, successful_airlines, errors):
-        """Format multi-airline flight data for display"""
+        """Format multi-airline flight data for compact display"""
         try:
             display_text = f"Great news! I found {total_flights} flight options across {successful_airlines} airlines:\n\n"
             
             if not flights:
                 return "I completed the search but couldn't retrieve the detailed flight information."
             
+            # Group flights by airline
             airline_groups = {}
             for flight in flights[:10]:
                 airline = flight.get('source_airline', flight.get('airline', 'Unknown'))
@@ -1267,12 +1289,26 @@ Keep it conversational and informative:
                 display_text += f"✈️ **{airline.upper().replace('_', ' ')}** ({len(airline_flights)} options):\n"
                 
                 for i, flight in enumerate(airline_flights[:3], 1):
+                    # Extract flight details
                     price = flight.get('price', flight.get('totalPrice', flight.get('cost', 'N/A')))
-                    departure_time = flight.get('departureTime', flight.get('departure', 'N/A'))
-                    arrival_time = flight.get('arrivalTime', flight.get('arrival', 'N/A'))
-                    duration = flight.get('duration', flight.get('flightDuration', 'N/A'))
+                    departure_time = flight.get('departure_time', flight.get('departureTime', flight.get('departure', 'N/A')))
+                    arrival_time = flight.get('arrival_time', flight.get('arrivalTime', flight.get('arrival', 'N/A')))
+                    duration = flight.get('duration', flight.get('flightDuration', ''))
+                    origin = flight.get('origin', flight.get('source', ''))
+                    destination = flight.get('destination', flight.get('dest', ''))
                     
-                    display_text += f"   💰 PKR {price} | 🛫 {departure_time} → 🛬 {arrival_time} | ⏱️ {duration}\n"
+                    # Format route and time
+                    route_time = f"📍 {origin} → {destination} 🕐 {departure_time} → {arrival_time}"
+                    if duration:
+                        route_time += f" ({duration})"
+                    
+                    # Format price
+                    if isinstance(price, (int, float)) and price != 'N/A':
+                        price_text = f"PKR {price:,}"
+                    else:
+                        price_text = str(price)
+                    
+                    display_text += f"   {route_time} 💰 {price_text}\n"
                 
                 display_text += "\n"
             

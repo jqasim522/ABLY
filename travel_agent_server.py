@@ -58,7 +58,7 @@ class TravelAgentServer:
             await asyncio.sleep(300)  # Check every 5 minutes
 
     def prepare_flight_data_for_client(self, flight_results):
-        """Prepare flight data in a format the client can easily handle"""
+        """Prepare flight data in a format the client can easily handle while preserving fare details"""
         try:
             if not isinstance(flight_results, dict):
                 return None
@@ -68,23 +68,23 @@ class TravelAgentServer:
             if not flights:
                 return None
             
-            # Limit to top 5 flights and keep only essential fields for transmission
-            simplified_flights = []
+            # Limit to top 5 flights and preserve detailed fare information
+            detailed_flights = []
             
-            for flight in flights[:5]:  # Limit to 5 flights
+            for flight in flights[:7]:  # Limit to 5 flights
                 try:
-                    # Create a simplified flight object with only essential data
-                    simplified_flight = {}
+                    # Create a detailed flight object preserving fare options
+                    detailed_flight = {}
                     
                     # Flight identification
-                    simplified_flight['flight_number'] = (
+                    detailed_flight['flight_number'] = (
                         flight.get('flight_number') or 
                         flight.get('FlightNumber') or 
                         'N/A'
                     )
                     
                     # Airline
-                    simplified_flight['airline'] = (
+                    detailed_flight['airline'] = (
                         flight.get('airline') or 
                         flight.get('source_airline') or 
                         flight.get('Airline') or 
@@ -92,67 +92,90 @@ class TravelAgentServer:
                     )
                     
                     # Times
-                    simplified_flight['departure_time'] = (
+                    detailed_flight['departure_time'] = (
                         flight.get('departure_time') or 
                         flight.get('DepartureTime') or 
                         'N/A'
                     )
                     
-                    simplified_flight['arrival_time'] = (
+                    detailed_flight['arrival_time'] = (
                         flight.get('arrival_time') or 
                         flight.get('ArrivalTime') or 
                         'N/A'
                     )
                     
-                    # Price - try multiple fields
-                    price = (
-                        flight.get('price') or 
-                        flight.get('sortable_price') or
-                        flight.get('total_fare') or 
-                        flight.get('ChargedTotalPrice') or 
-                        flight.get('totalPrice') or 
-                        flight.get('cost')
+                    # Duration
+                    detailed_flight['duration'] = (
+                        flight.get('duration') or 
+                        flight.get('Duration') or 
+                        ''
                     )
                     
-                    if price and isinstance(price, (int, float)):
-                        simplified_flight['price'] = int(price)
-                    else:
-                        simplified_flight['price'] = 'N/A'
-                    
                     # Route information
-                    simplified_flight['origin'] = flight.get('origin', '')
-                    simplified_flight['destination'] = flight.get('destination', '')
+                    detailed_flight['origin'] = flight.get('origin', '')
+                    detailed_flight['destination'] = flight.get('destination', '')
                     
-                    # Add any fare options if available (but simplified)
-                    if flight.get('fare_options'):
-                        fare_options = flight['fare_options']
-                        if isinstance(fare_options, list) and fare_options:
-                            cheapest_fare = min(fare_options, key=lambda x: x.get('total_fare', 999999))
-                            simplified_flight['price'] = cheapest_fare.get('total_fare', simplified_flight['price'])
-                            simplified_flight['fare_name'] = cheapest_fare.get('fare_name', 'Standard')
+                    # Preserve detailed fare options if available
+                    if flight.get('fare_options') and isinstance(flight['fare_options'], list):
+                        detailed_flight['fare_options'] = []
+                        
+                        for fare in flight['fare_options']:
+                            if isinstance(fare, dict):
+                                fare_detail = {
+                                    'fare_name': fare.get('fare_name', 'Standard'),
+                                    'total_fare': fare.get('total_fare', 0),
+                                    'base_fare': fare.get('base_fare', 0),
+                                    'hand_baggage_kg': fare.get('hand_baggage_kg', 0),
+                                    'checked_baggage_kg': fare.get('checked_baggage_kg', 0),
+                                    'refundable_before_48h': fare.get('refundable_before_48h', False),
+                                    'refund_fee_48h': fare.get('refund_fee_48h', 0)
+                                }
+                                detailed_flight['fare_options'].append(fare_detail)
+                        
+                        # Set the main price to the cheapest fare
+                        if detailed_flight['fare_options']:
+                            cheapest_fare = min(detailed_flight['fare_options'], key=lambda x: x.get('total_fare', 999999))
+                            detailed_flight['price'] = cheapest_fare.get('total_fare', 0)
                     
-                    simplified_flights.append(simplified_flight)
+                    else:
+                        # Fallback to simple price if no fare options
+                        price = (
+                            flight.get('price') or 
+                            flight.get('sortable_price') or
+                            flight.get('total_fare') or 
+                            flight.get('ChargedTotalPrice') or 
+                            flight.get('totalPrice') or 
+                            flight.get('cost')
+                        )
+                        
+                        if price and isinstance(price, (int, float)):
+                            detailed_flight['price'] = int(price)
+                        else:
+                            detailed_flight['price'] = 'N/A'
                     
+                    detailed_flights.append(detailed_flight)
+                        
                 except Exception as e:
-                    print(f"❌ Error simplifying flight: {e}")
+                    print(f"❌ Error preparing detailed flight: {e}")
                     continue
             
-            if not simplified_flights:
+            if not detailed_flights:
                 return None
             
-            # Create the simplified result structure
-            simplified_result = {
-                'flights': simplified_flights,
-                'total_flights': len(simplified_flights),
+            # Create the detailed result structure
+            detailed_result = {
+                'flights': detailed_flights,
+                'total_flights': len(detailed_flights),
                 'successful_airlines': flight_results.get('successful_airlines', 1),
                 'search_completed': True
             }
             
-            return simplified_result
+            return detailed_result
             
         except Exception as e:
             print(f"❌ Error preparing flight data: {e}")
             return None
+
 
     def calculate_message_size(self, data):
         """Calculate approximate message size in bytes"""
@@ -237,41 +260,36 @@ class TravelAgentServer:
                         except Exception as e:
                             print(f"Error calculating turnaround time: {e}")
                     
-                    # Debug logging
+                    # Debug logging for flight results
                     if 'flight_results' in result:
                         flight_data = result['flight_results']
                         if isinstance(flight_data, dict) and 'flights' in flight_data:
                             print(f"✈️ Raw flight results: {len(flight_data['flights'])} flights")
                             
-                            # Prepare simplified flight data for client
-                            simplified_flight_data = self.prepare_flight_data_for_client(flight_data)
+                            # Prepare detailed flight data for client (preserving fare options)
+                            detailed_flight_data = self.prepare_flight_data_for_client(flight_data)
                             
-                            if simplified_flight_data:
-                                # Replace the complex flight_results with simplified version
-                                result['flight_results'] = simplified_flight_data
-                                print(f"✅ Simplified to {len(simplified_flight_data['flights'])} flights")
+                            if detailed_flight_data:
+                                # Replace with detailed version
+                                result['flight_results'] = detailed_flight_data
+                                print(f"✅ Prepared {len(detailed_flight_data['flights'])} detailed flights")
+                                
+                                # Log if we have fare options
+                                for i, flight in enumerate(detailed_flight_data['flights'][:3]):
+                                    if flight.get('fare_options'):
+                                        print(f"   Flight {i+1}: {len(flight['fare_options'])} fare options")
+                                    else:
+                                        print(f"   Flight {i+1}: Simple pricing only")
                             else:
-                                print("❌ Failed to simplify flight data")
-                                # Remove flight_results if we can't simplify it
-                                result.pop('flight_results', None)
+                                print("❌ Failed to prepare detailed flight data")
+                                # Keep original flight_results
                     
                     # Check final message size
                     message_size = self.calculate_message_size(result)
                     print(f"📤 Sending flight search response ({message_size} bytes)")
                     
-                    # If still too large, send just the text response
-                    if message_size > 60000:  # 60KB limit
-                        print("⚠️ Message still too large, sending text-only response")
-                        text_result = {
-                            'user_id': user_id,
-                            'response': result.get('response', 'Flight search completed but results too large to display'),
-                            'type': 'search_complete',
-                            'status': 'complete',
-                            'turnaround_time': result.get('turnaround_time', 0)
-                        }
-                        await self.channel.publish(EVENTS['AGENT_RESPONSE'], text_result)
-                    else:
-                        await self.channel.publish(EVENTS['AGENT_RESPONSE'], result)
+                    # Send the response
+                    await self.channel.publish(EVENTS['AGENT_RESPONSE'], result)
                 else:
                     # Handle non-dict results
                     error_result = {

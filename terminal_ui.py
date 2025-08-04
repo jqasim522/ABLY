@@ -63,7 +63,7 @@ class ConversationalTravelTerminal:
         # Check if terminal supports colors
         if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
             Colors.disable()
-            
+
     def _format_flight_results(self, results):
         """Format flight search results for display"""
         if not results:
@@ -74,16 +74,11 @@ class ConversationalTravelTerminal:
             formatted_parts = ["📋 Here are the flights I found for you:"]
             flights_added = 0
             
-            # print(f"DEBUG: Formatting results of type: {type(results)}")
-            
             # Handle the simplified flight results structure from server
             if isinstance(results, dict):
-                # print(f"DEBUG: Results keys: {list(results.keys())}")
-                
                 # Check for simplified flights structure
                 if 'flights' in results and isinstance(results['flights'], list):
                     flights = results['flights']
-                    # print(f"DEBUG: Found {len(flights)} simplified flights")
                     
                     if flights:
                         total_flights = results.get('total_flights', len(flights))
@@ -92,7 +87,7 @@ class ConversationalTravelTerminal:
                         formatted_parts.append(f"\n🔍 Found {total_flights} flight options across {successful_airlines} airlines:")
                         
                         for i, flight in enumerate(flights, 1):
-                            flight_info = self._format_simplified_flight(flight, i)
+                            flight_info = self._format_simplified_flight_compact(flight, i)
                             if flight_info:
                                 formatted_parts.append(flight_info)
                                 flights_added += 1
@@ -110,13 +105,11 @@ class ConversationalTravelTerminal:
                 formatted_parts.append(f"\n🔍 Found {len(results)} flight options:")
                 
                 for i, flight in enumerate(results[:5], 1):
-                    flight_info = self._format_simplified_flight(flight, i)
+                    flight_info = self._format_simplified_flight_compact(flight, i)
                     if flight_info:
                         formatted_parts.append(flight_info)
                         flights_added += 1
                         
-            # print(f"DEBUG: Successfully formatted {flights_added} flights")
-            
             if flights_added > 0:
                 formatted_parts.append(f"\n💡 Would you like more details about any of these flights or search with different criteria?")
                 return "\n".join(formatted_parts)
@@ -129,52 +122,90 @@ class ConversationalTravelTerminal:
             import traceback
             traceback.print_exc()
             return "✈️ Flight search was successful but I had trouble formatting the results. Please try again."
+    
 
-    def _format_simplified_flight(self, flight, flight_number):
-        """Format a simplified flight entry from the server"""
+    def _format_simplified_flight_compact(self, flight, flight_number):
+        """Format a simplified flight entry in compact format"""
         try:
             if not isinstance(flight, dict):
                 print(f"DEBUG: Flight is not a dict: {type(flight)}")
                 return None
             
-            # print(f"DEBUG: Formatting simplified flight {flight_number} with keys: {list(flight.keys())}")
-            
-            # Extract data from simplified flight structure
+            # Extract basic flight data
             flight_no = flight.get('flight_number', 'N/A')
             airline = flight.get('airline', 'Unknown')
             departure_time = flight.get('departure_time', 'N/A')
             arrival_time = flight.get('arrival_time', 'N/A')
-            price = flight.get('price', 'N/A')
             origin = flight.get('origin', '')
             destination = flight.get('destination', '')
             
-            # Format price
-            if isinstance(price, (int, float)) and price != 'N/A':
-                price_str = f"PKR {price:,.0f}"
+            # Build route and time info on one line
+            route_time = f"📍 {origin} → {destination} 🕐 {departure_time} → {arrival_time}"
+            
+            # Add duration if available
+            duration = flight.get('duration', '')
+            if duration:
+                route_time += f" ({duration})"
+            
+            # Handle detailed fare options (preferred format)
+            fare_options_text = ""
+            if flight.get('fare_options') and isinstance(flight['fare_options'], list):
+                fare_options = flight['fare_options']
+                fare_lines = []
+                
+                for fare in fare_options:
+                    fare_name = fare.get('fare_name', 'Standard')
+                    total_fare = fare.get('total_fare', 0)
+                    hand_baggage = fare.get('hand_baggage_kg', 0)
+                    checked_baggage = fare.get('checked_baggage_kg', 0)
+                    refund_fee = fare.get('refund_fee_48h', 0)
+                    refundable = fare.get('refundable_before_48h', False)
+                    
+                    # Format baggage info
+                    baggage_info = f"Hand: {hand_baggage}kg"
+                    if checked_baggage > 0:
+                        baggage_info += f" | Checked: {checked_baggage}kg"
+                    else:
+                        baggage_info += " | No checked baggage"
+                    
+                    # Format refund info
+                    if refundable and refund_fee > 0:
+                        refund_info = f"Refund fee: PKR {refund_fee}"
+                    elif refundable:
+                        refund_info = "Refundable"
+                    else:
+                        refund_info = "Non-refundable"
+                    
+                    # Create fare line
+                    fare_line = f"   • **{fare_name}**: PKR {total_fare:,} ({baggage_info} | {refund_info})"
+                    fare_lines.append(fare_line)
+                
+                if fare_lines:
+                    fare_options_text = " 💰 **Fare Options:**\n" + "\n".join(fare_lines)
+            
+            # Handle simple price (fallback for flights without detailed fare breakdown)
+            elif flight.get('price'):
+                price = flight['price']
+                if isinstance(price, (int, float)) and price != 'N/A':
+                    fare_options_text = f" 💰 PKR {price:,}"
+                else:
+                    fare_options_text = f" 💰 {price}"
+            
+            # Build complete flight info - put everything on fewer lines for compact display
+            if fare_options_text and '\n' in fare_options_text:
+                # Multi-line fare options (detailed)
+                header = f"✈️ **Flight {flight_number}: {airline} {flight_no}**"
+                result_parts = [header, route_time, fare_options_text]
             else:
-                price_str = "Price on request"
-            
-            # Build the formatted string
-            header = f"  ✈️ Flight {flight_number}: {airline} {flight_no}"
-            time_info = f"     🕒 {departure_time} → {arrival_time}"
-            price_info = f"     💰 {price_str}"
-            
-            result_parts = [header, time_info, price_info]
-            
-            # Add route if available
-            if origin and destination:
-                route_info = f"     📍 {origin} → {destination}"
-                result_parts.insert(1, route_info)
-            
-            # Add fare type if available
-            if flight.get('fare_name'):
-                fare_info = f"     🎫 {flight['fare_name']}"
-                result_parts.append(fare_info)
+                # Single line format for simple pricing
+                header = f"✈️ **Flight {flight_number}: {airline} {flight_no}**"
+                single_line = route_time + fare_options_text
+                result_parts = [header, single_line]
             
             return "\n".join(result_parts)
             
         except Exception as e:
-            print(f"ERROR: Exception in _format_simplified_flight: {e}")
+            print(f"ERROR: Exception in _format_simplified_flight_compact: {e}")
             print(f"DEBUG: Flight data was: {flight}")
             return None
 
