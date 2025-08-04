@@ -36,6 +36,7 @@ This project consists of:
 ├── test_parameter_parsing.py  # Unit tests for parameter extraction
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # Project documentation
+├── ably_Config.py             # help to connect ably protocol by using ABLY API KEY
 └── .env                       # Environment variables (create this file)
 ```
 
@@ -85,6 +86,12 @@ To get a Gemini API key:
 - Create a new API key
 - Copy the key to your `.env` file
 
+6. **Set up ABLY API KEY**
+ To get a ably API key:
+- Visit [ABLY]([https://makersuite.google.com/](https://ably.com/sign-up?provider=github))
+- Sign in with your Google account or github
+- Create a new API key
+- Copy the key to your `ably_Config.py ` file  
 ---
 
 ## 🚀 Usage
